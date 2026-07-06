@@ -2,6 +2,10 @@
   "version": 2,
   "builds": [
     {
+      "src": "dist/server.cjs",
+      "use": "@vercel/node"
+    },
+    {
       "src": "package.json",
       "use": "@vercel/static-build"
     }
