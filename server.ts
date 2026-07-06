@@ -5,12 +5,44 @@ import fs from "fs";
 
 // 1. นำ app ออกมาไว้ด้านนอกสุด เพื่อให้ Vercel มองเห็น
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-const MAPPINGS_FILE = path.join(process.cwd(), "device_mappings.json");
+// ⭐ ตั้งค่า Linux persistent path สำหรับ device_mappings.json
+const getMappingsPath = (): string => {
+  // 1. ลองใช้ environment variable ก่อน
+  if (process.env.MAPPINGS_DIR) {
+    return process.env.MAPPINGS_DIR;
+  }
+  
+  // 2. ถ้ารัน Linux → ใช้ /var/lib/solar-iot-dashboard (path ถาวร)
+  if (process.platform === 'linux') {
+    return '/var/lib/solar-iot-dashboard';
+  }
+  
+  // 3. fallback สำหรับ Windows/Mac ใช้ project directory + data folder
+  return path.join(process.cwd(), 'data');
+};
+
+const MAPPINGS_DIR = getMappingsPath();
+const MAPPINGS_FILE = path.join(MAPPINGS_DIR, 'device_mappings.json');
+
+// สร้าง directory ถ้ายังไม่มี
+function ensureMappingsDirectory() {
+  try {
+    if (!fs.existsSync(MAPPINGS_DIR)) {
+      fs.mkdirSync(MAPPINGS_DIR, { recursive: true });
+      console.log(`✅ Created mappings directory: ${MAPPINGS_DIR}`);
+    } else {
+      console.log(`✅ Mappings directory exists: ${MAPPINGS_DIR}`);
+    }
+  } catch (e) {
+    console.error(`❌ Failed to create/verify mappings directory: ${e}`);
+    process.exit(1);
+  }
+}
 
 function loadMappings() {
   try {
@@ -32,6 +64,9 @@ function saveMappings(mappings: any) {
 }
 
 const targetUrl = "https://smartsolar-th.com/api/v1";
+
+// 🔧 เรียก function เพื่อให้แน่ใจว่า directory มีอยู่ก่อนใช้งาน
+ensureMappingsDirectory();
 
 function getForwardHeaders(req: express.Request): Record<string, string> {
   const headers: Record<string, string> = {};
