@@ -1,0 +1,6 @@
+{
+  "name": "Smart Solar IoT Dashboard",
+  "description": "Production-grade IoT monitoring system for Solar Street Lights, featuring energy analysis, device management, and real-time alerts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
