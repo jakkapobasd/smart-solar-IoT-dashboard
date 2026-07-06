@@ -5,7 +5,7 @@ import fs from "fs";
 
 // 1. นำ app ออกมาไว้ด้านนอกสุด เพื่อให้ Vercel มองเห็น
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
