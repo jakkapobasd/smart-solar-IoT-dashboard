@@ -65,10 +65,13 @@ const LeafletOverlay: React.FC<LeafletOverlayProps> = ({ map, lng, lat, onClick,
     return () => {
       el.removeEventListener('click', clickHandler);
       if (markerRef.current) {
+        // Failsafe cleanup
         try {
-          markerRef.current.remove();
+          if ((markerRef.current as any)._map) {
+            markerRef.current.remove();
+          }
         } catch (e) {
-          console.warn("Leaflet marker removal failed in AddDevice:", e);
+          // Ignore errors on cleanup as map might be gone already.
         }
       }
     };
@@ -87,8 +90,8 @@ const AddDeviceMapComp: React.FC<{
   mapCenter: [number, number];
   mapZoom: number;
   registerMode: 'manual' | 'project';
-  filteredProjectDevices: any[];
-  activeProjectEui: string;
+  filteredProfileDevices: any[];
+  activeDeviceEui: string;
   focusDeviceOnMap: (item: any) => void;
   handleMapClick: (lat: number, lng: number) => void;
   handleBoundsChange: (center: [number, number], zoom: number) => void;
@@ -96,8 +99,8 @@ const AddDeviceMapComp: React.FC<{
   mapCenter,
   mapZoom,
   registerMode,
-  filteredProjectDevices,
-  activeProjectEui,
+  filteredProfileDevices,
+  activeDeviceEui,
   focusDeviceOnMap,
   handleMapClick,
   handleBoundsChange
@@ -168,8 +171,8 @@ const AddDeviceMapComp: React.FC<{
       {mapInstance && (
         <>
           {registerMode === 'project' ? (
-            filteredProjectDevices.map((item, index) => {
-              const isSelected = activeProjectEui === item.devEui;
+            filteredProfileDevices.map((item, index) => {
+              const isSelected = activeDeviceEui === item.devEui;
               return (
                 <LeafletOverlay
                   key={item.devEui || index}
@@ -238,14 +241,14 @@ const AddDevice: React.FC = () => {
     return "00000000-0000-0000-0000-000000000000"; // realistic default fallback UUID
   };
 
-  // Project Templates Selection States
-  const [projects, setProjects] = useState<any[]>([]);
-  const [selectedProjId, setSelectedProjId] = useState<string>('');
-  const [projectDevices, setProjectDevices] = useState<any[]>([]);
-  const [loadingProjDevices, setLoadingProjDevices] = useState(false);
-  const [projectSearchTerm, setProjectSearchTerm] = useState('');
+  // States for "Import from Profile" mode
+  const [allAppDevices, setAllAppDevices] = useState<any[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<string>('');
+  const [profileDevices, setProfileDevices] = useState<any[]>([]);
+  const [loadingProfileDevices, setLoadingProfileDevices] = useState(false);
+  const [deviceSearchTerm, setDeviceSearchTerm] = useState('');
   const [selectedProjDevices, setSelectedProjDevices] = useState<string[]>([]); // Selected DevEUIs
-  const [activeProjectEui, setActiveProjectEui] = useState<string>('');
+  const [activeDeviceEui, setActiveDeviceEui] = useState<string>('');
   const [hideRegistered, setHideRegistered] = useState<boolean>(true);
 
   // Form State for manual registration
@@ -279,18 +282,21 @@ const AddDevice: React.FC = () => {
   const fetchLocalConfigsAndDevices = async () => {
     if (!user?.applicationId) return;
     try {
-      const [groupRes, gwRes, activeDevsRes, profilesRes] = await Promise.all([
+      const [groupRes, gwRes, allDevsRes, profilesRes] = await Promise.all([
         api.get('/multicast-groups', { params: { applicationId: user.applicationId, limit: 100 } }),
         api.get('/gateways', { params: { tenantId: user.tenantId, limit: 100 } }),
-        api.get('/devices', { params: { applicationId: user.applicationId, limit: 200 } }),
+        api.get('/devices', { params: { applicationId: user.applicationId, limit: 500 } }),
         user.tenantId ? DeviceService.getDeviceProfiles(user.tenantId, 100) : Promise.resolve({ data: { result: [] } })
       ]);
       setGroups(groupRes.data.result || []);
       setGateways(gwRes.data.result || []);
-      setExistingDevEuis(new Set((activeDevsRes.data.result || []).map((d: any) => d.devEui)));
+      const allDevicesList = allDevsRes.data.result || [];
+      setAllAppDevices(allDevicesList);
+      setExistingDevEuis(new Set(allDevicesList.map((d: any) => d.devEui)));
       const profiles = profilesRes?.data?.result || [];
       setDeviceProfiles(profiles);
       if (profiles.length > 0) {
+        setSelectedProfileId(profiles[0].id || profiles[0].deviceProfileId);
         setFormData(prev => ({
           ...prev,
           deviceProfile: profiles[0].name || prev.deviceProfile
@@ -305,129 +311,51 @@ const AddDevice: React.FC = () => {
     fetchLocalConfigsAndDevices();
   }, [user]);
 
-  // Fetch available projects (applications)
+  // Filter devices when a device profile is selected
   useEffect(() => {
-    const fetchProjects = async () => {
-      if (!user?.tenantId) return;
-      try {
-        const appsRes = await api.get('/applications', { params: { tenantId: user.tenantId, limit: 100 } });
-        let apps = appsRes.data.result || [];
-        
-        const mergedItems = [...apps];
-        setProjects(mergedItems);
-        
-        if (mergedItems.length > 0) {
-          setSelectedProjId(mergedItems[0].id);
-        }
-      } catch (err) {
-        console.error("Failed to fetch applications for project selection", err);
+    if (!selectedProfileId || !deviceProfiles.length) {
+      setProfileDevices([]);
+      return;
+    }
+    setLoadingProfileDevices(true);
+    setSelectedProjDevices([]); // Reset selections on profile swap
+
+    const selectedProfile = deviceProfiles.find(p => (p.id || p.deviceProfileId) === selectedProfileId);
+    
+    if (selectedProfile) {
+      const filtered = allAppDevices.filter(d => d.product?.devProfileName === selectedProfile.name);
+      setProfileDevices(filtered);
+      if (filtered.length > 0) {
+        setMapCenter([filtered[0].latitude || 13.7563, filtered[0].longitude || 100.5018]);
       }
-    };
-    fetchProjects();
-  }, [user]);
-
-  // Dynamically load devices belonging to the chosen project/application
-  useEffect(() => {
-    const fetchProjDevices = async () => {
-      if (!selectedProjId) return;
-      setLoadingProjDevices(true);
-      setSelectedProjDevices([]); // Reset selections on project swap
-
-      const projObj = projects.find(p => p.id === selectedProjId);
-      
-      if (projObj?.isTemplate) {
-        // High fidelity simulated configurations for quick importing without typing
-        setTimeout(() => {
-          let mockList: any[] = [];
-          if (selectedProjId === 'template-wha-industrial') {
-            mockList = [
-              { devEui: '70B3D57ED0054321', appKey: '11223344556677889900AABBCCDDEEFF', name: 'WHA-Lantern-StreetLight-01', description: 'เสาไฟฟ้าโซลาร์เซลล์ WHA - โซนพลาซ่า 1', latitude: 13.7570, longitude: 100.5020, deviceProfile: 'LED Solar Street Light Profile' },
-              { devEui: '70B3D57ED0054322', appKey: '223344556677889900AABBCCDDEEFF11', name: 'WHA-Lantern-StreetLight-02', description: 'เสาไฟฟ้าโซลาร์เซลล์ WHA - ทางเข้าหลักโซน B', latitude: 13.7552, longitude: 100.5011, deviceProfile: 'LED Solar Street Light Profile' },
-              { devEui: '70B3D57ED0054323', appKey: '3344556677889900AABBCCDDEEFF1122', name: 'WHA-HighMastLight-03', description: 'โคมไฟส่องสว่างคลังสินค้าหลังใหญ่ WHA W1', latitude: 13.7582, longitude: 100.5034, deviceProfile: 'LED Solar Street Light Profile' },
-              { devEui: '70B3D57ED0054324', appKey: '44556677889900AABBCCDDEEFF112233', name: 'WHA-PV-SensorStation-04', description: 'สถานีตรวจวัดไฟฟ้าแสงแดด Smart Solar WHA', latitude: 13.7561, longitude: 100.5005, deviceProfile: 'Smart Photovoltaic Sensor Station' },
-              { devEui: '70B3D57ED0054325', appKey: '556677889900AABBCCDDEEFF11223344', name: 'WHA-GateActuator-05', description: 'อุปกรณ์เปิดปิดประตูปั๊มน้ำ คลาส C WHA', latitude: 13.7594, longitude: 100.5048, deviceProfile: 'Standard Class-C Actuator Model' }
-            ];
-          } else if (selectedProjId === 'template-amata-smart') {
-            mockList = [
-              { devEui: '70B3D57ED0065431', appKey: '8899AABBCCDDEEFF0011223344556677', name: 'AMATA-StreetLight-A21', description: 'โคมไฟส่องถนนอัจฉริยะ Amata โซนสวนอุตสาหกรรม Phase 4', latitude: 13.2215, longitude: 101.0118, deviceProfile: 'Standard Class-C Actuator Model' },
-              { devEui: '70B3D57ED0065432', appKey: '99AABBCCDDEEFF001122334455667788', name: 'AMATA-StreetLight-A22', description: 'โคมไฟส่องถนนหน้านิคมโซนตะวันออก Amata', latitude: 13.2225, longitude: 101.0125, deviceProfile: 'Standard Class-C Actuator Model' },
-              { devEui: '70B3D57ED0065433', appKey: 'AABBCCDDEEFF00112233445566778899', name: 'AMATA-SolarStation-10', description: 'เซ็นเซอร์ตรวจสอบแผงโซลาร์ Amata Solar Smart Center', latitude: 13.2205, longitude: 101.0102, deviceProfile: 'Smart Photovoltaic Sensor Station' }
-            ];
-          }
-          setProjectDevices(mockList);
-          setLoadingProjDevices(false);
-          // Auto-recenter map on the first element to make it interactive!
-          if (mockList.length > 0) {
-            setMapCenter([mockList[0].latitude, mockList[0].longitude]);
-          }
-        }, 400);
-      } else {
-        // Real ChirpStack application devices
-        try {
-          const devsRes = await api.get('/devices', { 
-            params: { applicationId: selectedProjId, limit: 150 }
-          } as any);
-          const realDevs = devsRes.data.result || [];
-          
-          const enriched = realDevs.map((d: any) => ({
-            devEui: d.devEui,
-            appKey: d.appKey || '00000000000000000000000000000000',
-            name: d.name,
-            description: d.description || '',
-            latitude: d.latitude || 13.7563,
-            longitude: d.longitude || 100.5018,
-            deviceProfile: d.tags?.deviceProfile || 'LED Solar Street Light Profile'
-          }));
-          
-          setProjectDevices(enriched);
-          if (enriched.length > 0) {
-            setMapCenter([enriched[0].latitude, enriched[0].longitude]);
-          }
-        } catch (err) {
-          console.error("Failed to load real project devices", err);
-          // Resilient fallback
-          setProjectDevices([]);
-        } finally {
-          setLoadingProjDevices(false);
-        }
-      }
-    };
-
-    fetchProjDevices();
-  }, [selectedProjId, projects]);
+    } else {
+      setProfileDevices([]);
+    }
+    setLoadingProfileDevices(false);
+  }, [selectedProfileId, deviceProfiles, allAppDevices]);
 
   // Handle active project device default selection
   useEffect(() => {
-    if (registerMode === 'project' && projectDevices.length > 0) {
-      const unassigned = projectDevices.find(d => !existingDevEuis.has(d.devEui));
-      if (unassigned) {
-        setActiveProjectEui(unassigned.devEui);
+    if (registerMode === 'project' && profileDevices.length > 0) {
+      const unassigned = profileDevices.find(d => !existingDevEuis.has(d.devEui));
+      const deviceToFocus = unassigned || profileDevices[0];
+      
+      if (deviceToFocus) {
+        setActiveDeviceEui(deviceToFocus.devEui);
         setFormData(prev => ({
           ...prev,
-          latitude: unassigned.latitude || 13.7563,
-          longitude: unassigned.longitude || 100.5018,
-          name: unassigned.name,
-          devEui: unassigned.devEui,
-          appKey: unassigned.appKey
+          latitude: deviceToFocus.latitude || 13.7563,
+          longitude: deviceToFocus.longitude || 100.5018,
+          name: deviceToFocus.name,
+          devEui: deviceToFocus.devEui,
+          appKey: deviceToFocus.appKey
         }));
-        setMapCenter([unassigned.latitude || 13.7563, unassigned.longitude || 100.5018]);
-      } else {
-        const firstDev = projectDevices[0];
-        setActiveProjectEui(firstDev.devEui);
-        setFormData(prev => ({
-          ...prev,
-          latitude: firstDev.latitude || 13.7563,
-          longitude: firstDev.longitude || 100.5018,
-          name: firstDev.name,
-          devEui: firstDev.devEui,
-          appKey: firstDev.appKey
-        }));
-        setMapCenter([firstDev.latitude || 13.7563, firstDev.longitude || 100.5018]);
+        setMapCenter([deviceToFocus.latitude || 13.7563, deviceToFocus.longitude || 100.5018]);
       }
     } else {
-      setActiveProjectEui('');
+      setActiveDeviceEui('');
     }
-  }, [projectDevices, existingDevEuis, registerMode]);
+  }, [profileDevices, existingDevEuis, registerMode]);
 
   // Handle Map Click coordinate updates
   const handleMapClick = (lat: number, lng: number) => {
@@ -435,9 +363,9 @@ const AddDevice: React.FC = () => {
     const latFixed = parseFloat(lat.toFixed(6));
     const lngFixed = parseFloat(lng.toFixed(6));
 
-    if (registerMode === 'project' && activeProjectEui) {
-      setProjectDevices(prev =>
-        prev.map(d => d.devEui === activeProjectEui ? { ...d, latitude: latFixed, longitude: lngFixed } : d)
+    if (registerMode === 'project' && activeDeviceEui) {
+      setProfileDevices(prev =>
+        prev.map(d => d.devEui === activeDeviceEui ? { ...d, latitude: latFixed, longitude: lngFixed } : d)
       );
     }
 
@@ -536,8 +464,15 @@ const AddDevice: React.FC = () => {
     let successCount = 0;
     let failedCount = 0;
 
+    const selectedProfile = deviceProfiles.find(p => (p.id || p.deviceProfileId) === selectedProfileId);
+    if (!selectedProfile) {
+        showToast('error', 'Could not find the selected device profile. Please re-select.');
+        setLoading(false);
+        return;
+    }
+
     for (const devEui of selectedProjDevices) {
-      const targetDev = projectDevices.find(d => d.devEui === devEui);
+      const targetDev = profileDevices.find(d => d.devEui === devEui);
       if (!targetDev) continue;
 
       const isAlreadyLinked = existingDevEuis.has(targetDev.devEui);
@@ -554,12 +489,12 @@ const AddDevice: React.FC = () => {
             latitude: Number(targetDev.latitude),
             longitude: Number(targetDev.longitude),
             enabledClass: 'C',
-            deviceProfileId: getProfileId(targetDev.deviceProfile),
+            deviceProfileId: selectedProfile.id || selectedProfile.deviceProfileId,
             isDisabled: false,
             skipFcntCheck: true,
             tags: {
-              deviceProfile: targetDev.deviceProfile,
-              note: `Auto imported from Project: ${projects.find(p => p.id === selectedProjId)?.name || 'Sync'}`
+              deviceProfile: selectedProfile.name,
+              note: `Auto imported from Profile: ${selectedProfile.name || 'Sync'}`
             }
           };
 
@@ -620,7 +555,7 @@ const AddDevice: React.FC = () => {
 
   // Map focus micro-interactions
   const focusDeviceOnMap = (device: any) => {
-    setActiveProjectEui(device.devEui);
+    setActiveDeviceEui(device.devEui);
     setMapCenter([device.latitude, device.longitude]);
     setMapZoom(16);
     // Autofill coordinate inputs too in case user wants to review
@@ -635,9 +570,9 @@ const AddDevice: React.FC = () => {
   };
 
   // Filters
-  const filteredProjectDevices = projectDevices.filter(d => {
-    const matchesSearch = d.name.toLowerCase().includes(projectSearchTerm.toLowerCase()) || 
-                          d.devEui.toLowerCase().includes(projectSearchTerm.toLowerCase());
+  const filteredProfileDevices = profileDevices.filter(d => {
+    const matchesSearch = (d.name || '').toLowerCase().includes(deviceSearchTerm.toLowerCase()) || 
+                          (d.devEui || '').toLowerCase().includes(deviceSearchTerm.toLowerCase());
     if (!matchesSearch) return false;
     if (hideRegistered && existingDevEuis.has(d.devEui)) {
       return false;
@@ -761,29 +696,29 @@ const AddDevice: React.FC = () => {
                       นำเข้าอุปกรณ์จากส่วนกลาง
                     </h2>
                     <p className="text-xs text-slate-500 mt-1">
-                      เลือกโครงการเพื่อดึงรายชื่ออุปกรณ์ย่อย ลำเรือนโคมไฟ และเซนเซอร์โซลาร์ทั้งหมดจากระบบหลังบ้าน โดยไม่ต้องคีย์ EUI ซ้ำซ้อน
+                      เลือกประเภทอุปกรณ์ (Device Profile) เพื่อแสดงรายการอุปกรณ์ทั้งหมดที่ตรงกันจากในระบบ
                     </p>
                   </div>
 
-                  {/* Project Selector */}
+                  {/* Device Profile Selector */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1 mb-1 block">
-                        เลือกโครงการเป้าหมาย (Central Project)
+                        เลือกประเภทอุปกรณ์ (Device Profile)
                       </label>
                       <div className="relative">
                         <select
-                          value={selectedProjId}
-                          onChange={e => setSelectedProjId(e.target.value)}
+                          value={selectedProfileId}
+                          onChange={e => setSelectedProfileId(e.target.value)}
                           className="w-full bg-slate-50 dark:bg-slate-800 border-none rounded-2xl px-4 py-4 pr-10 text-sm font-bold text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-blue-500 shadow-inner appearance-none"
                         >
-                          {projects.map(p => (
-                            <option key={p.id} value={p.id}>
-                              {p.name} {p.isTemplate ? '⚡' : ''}
+                          {deviceProfiles.map(p => (
+                            <option key={p.id || p.deviceProfileId} value={p.id || p.deviceProfileId}>
+                              {p.name}
                             </option>
                           ))}
                         </select>
-                        <Building2 className="absolute right-4 top-4.5 w-4 h-4 text-slate-400 pointer-events-none" />
+                        <Cpu className="absolute right-4 top-4.5 w-4 h-4 text-slate-400 pointer-events-none" />
                       </div>
                     </div>
 
@@ -813,7 +748,7 @@ const AddDevice: React.FC = () => {
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-50/50 dark:bg-slate-900/10 p-3 rounded-2xl border border-slate-200/40 dark:border-slate-800/60">
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="h-6 px-2.5 bg-blue-100 dark:bg-blue-950/65 rounded-full text-[10.5px] font-black text-blue-600 dark:text-blue-400 flex items-center justify-center">
-                          {filteredProjectDevices.length} Nodes Found
+                          {filteredProfileDevices.length} Nodes Found
                         </div>
                         
                         {/* Hide Registered Toggle */}
@@ -834,8 +769,8 @@ const AddDevice: React.FC = () => {
                       <div className="relative w-full sm:max-w-[200px]">
                         <input
                           type="text"
-                          value={projectSearchTerm}
-                          onChange={e => setProjectSearchTerm(e.target.value)}
+                          value={deviceSearchTerm}
+                          onChange={e => setDeviceSearchTerm(e.target.value)}
                           placeholder="ค้นหาชื่ออุปกรณ์ / DevEUI..."
                           className="w-full bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-800 rounded-xl pl-8 pr-4 py-1.5 text-xs font-semibold outline-none focus:ring-1 focus:ring-blue-500 shadow-sm"
                         />
@@ -852,12 +787,12 @@ const AddDevice: React.FC = () => {
                               <input
                                 type="checkbox"
                                 checked={
-                                  filteredProjectDevices.length > 0 &&
-                                  filteredProjectDevices
+                                  filteredProfileDevices.length > 0 &&
+                                  filteredProfileDevices
                                     .filter(item => !existingDevEuis.has(item.devEui) || !!formData.multicastGroupId)
                                     .every(item => selectedProjDevices.includes(item.devEui))
                                 }
-                                onChange={() => toggleSelectAll(filteredProjectDevices)}
+                                onChange={() => toggleSelectAll(filteredProfileDevices)}
                                 className="rounded border-slate-300 dark:border-slate-700 text-blue-600 focus:ring-blue-500 h-4 w-4 shrink-0 transition-all cursor-pointer"
                               />
                             </th>
@@ -868,7 +803,7 @@ const AddDevice: React.FC = () => {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs font-semibold">
-                          {loadingProjDevices ? (
+                          {loadingProfileDevices ? (
                             <tr>
                               <td colSpan={5} className="py-12 text-center text-slate-450">
                                 <span className="inline-flex items-center gap-2 text-sm font-bold text-slate-500 animate-pulse">
@@ -877,21 +812,21 @@ const AddDevice: React.FC = () => {
                                 </span>
                               </td>
                             </tr>
-                          ) : filteredProjectDevices.length === 0 ? (
+                          ) : filteredProfileDevices.length === 0 ? (
                             <tr>
                               <td colSpan={5} className="py-12 text-center">
                                 <div className="flex flex-col items-center justify-center text-slate-400 py-4">
                                   <HelpCircle className="w-8 h-8 text-slate-300 mb-2" />
-                                  <p className="text-sm font-bold text-slate-500">ไม่พบข้อมูลอุปกรณ์ในโครงการนี้</p>
-                                  <p className="text-[11px] text-slate-400 mt-1">กรุณาลองเลือกโครงการอื่น หรือตรวจเช็ค backend API</p>
+                                  <p className="text-sm font-bold text-slate-500">ไม่พบอุปกรณ์ที่ตรงกับประเภทที่เลือก</p>
+                                  <p className="text-[11px] text-slate-400 mt-1">กรุณาลองเลือกประเภทอื่น หรือเพิ่มอุปกรณ์ใหม่ในระบบ</p>
                                 </div>
                               </td>
                             </tr>
                           ) : (
-                            filteredProjectDevices.map((item, index) => {
+                            filteredProfileDevices.map((item, index) => {
                               const isLinked = existingDevEuis.has(item.devEui);
                               const isChecked = selectedProjDevices.includes(item.devEui);
-                              const isActive = activeProjectEui === item.devEui;
+                              const isActive = activeDeviceEui === item.devEui;
                               return (
                                 <tr 
                                   key={item.devEui || index} 
@@ -1266,8 +1201,8 @@ const AddDevice: React.FC = () => {
                 mapCenter={mapCenter}
                 mapZoom={mapZoom}
                 registerMode={registerMode}
-                filteredProjectDevices={filteredProjectDevices}
-                activeProjectEui={activeProjectEui}
+                filteredProfileDevices={filteredProfileDevices}
+                activeDeviceEui={activeDeviceEui}
                 focusDeviceOnMap={focusDeviceOnMap}
                 handleMapClick={handleMapClick}
                 handleBoundsChange={handleBoundsChange}

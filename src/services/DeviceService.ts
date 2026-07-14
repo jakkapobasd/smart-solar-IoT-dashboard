@@ -44,8 +44,7 @@ const DeviceService = {
     const payload = {
       schedules: schedules.map((s, idx) => ({
         brightnessLevel: s.brightness,
-        duration: s.duration,
-        slot: idx + 1
+        duration: s.duration * 60 // Convert minutes from UI to seconds for API
       }))
     };
     const headers: Record<string, string> = {};
@@ -168,7 +167,7 @@ const DeviceService = {
     return api.get(`/devices/${devEui}/link-metrics`, { params });
   },
 
-  getDeviceRecords: async (devEui: string, startTs?: string, endTs?: string) => {
+  getDeviceRecords: async (devEui: string, startTs?: string, endTs?: string, limit: number = 200) => {
     return api.get(`/devices/${devEui}/records`, {
       params: {
         startTime: startTs,
@@ -177,7 +176,7 @@ const DeviceService = {
         endTs,
         start_ts: startTs,
         end_ts: endTs,
-        limit: 200
+        limit: limit
       }
     });
   }

@@ -234,7 +234,7 @@ const Settings: React.FC = () => {
         else {
           const lastSeen = new Date(dev.lastSeenAt).getTime();
           const diffHours = (now - lastSeen) / 3600000;
-          if (diffHours <= 1) {
+          if (diffHours <= 2) {
             devStatus.online++;
             if (diffHours > 0.5) {
               staleCount++;

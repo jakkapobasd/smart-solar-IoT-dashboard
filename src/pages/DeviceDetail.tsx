@@ -81,10 +81,13 @@ const LeafletOverlay: React.FC<LeafletOverlayProps> = ({
     return () => {
       el.removeEventListener('click', clickHandler);
       if (markerRef.current) {
+        // Failsafe cleanup
         try {
-          markerRef.current.remove();
+          if ((markerRef.current as any)._map) {
+            markerRef.current.remove();
+          }
         } catch (e) {
-          console.warn("Leaflet overlay marker removal failed:", e);
+          // Ignore errors on cleanup as map might be gone already.
         }
       }
     };
@@ -159,10 +162,13 @@ const LeafletOverlayDrag: React.FC<LeafletOverlayDragProps> = ({
     return () => {
       el.removeEventListener('click', clickHandler);
       if (markerRef.current) {
+        // Failsafe cleanup
         try {
-          markerRef.current.remove();
+          if ((markerRef.current as any)._map) {
+            markerRef.current.remove();
+          }
         } catch (e) {
-          console.warn("Leaflet drag marker removal failed:", e);
+          // Ignore errors on cleanup as map might be gone already.
         }
       }
     };
@@ -339,14 +345,14 @@ const DeviceDetailMapComp: React.FC<{
                 >
                   ✕
                 </button>
-                <div className="p-1 text-xs space-y-1 font-sans text-slate-700 dark:text-slate-200 leading-normal text-left pr-4">
+                  <div className="p-1 text-xs space-y-1 font-sans text-slate-700 dark:text-slate-200 leading-normal text-left pr-4 min-w-[180px]">
                   <p className="font-bold border-b border-slate-150 dark:border-slate-800 pb-1 mb-1 text-slate-900 dark:text-white">{device.name}</p>
-                  <p>Battery Voltage: {device.batteryVoltage} V</p>
-                  <p>Battery Current: {device.batteryCurrent} A</p>
-                  <p>Panel Voltage: {device.panelVoltage} V</p>
-                  <p>Panel Current: {device.panelCurrent} A</p>
-                  <p>Surface Temp: {device.surfaceTemp} °C</p>
-                  <p>Controller Temp: {device.controllerTemp} °C</p>
+                    <p>Battery Voltage: {device.batteryVoltage !== null ? `${device.batteryVoltage} V` : 'N/A'}</p>
+                    <p>Battery Current: {device.batteryCurrent !== null ? `${device.batteryCurrent} A` : 'N/A'}</p>
+                    <p>Panel Voltage: {device.panelVoltage !== null ? `${device.panelVoltage} V` : 'N/A'}</p>
+                    <p>Panel Current: {device.panelCurrent !== null ? `${device.panelCurrent} A` : 'N/A'}</p>
+                    <p>Surface Temp: {device.surfaceTemp !== null ? `${device.surfaceTemp} °C` : 'N/A'}</p>
+                    <p>Controller Temp: {device.controllerTemp !== null ? `${device.controllerTemp} °C` : 'N/A'}</p>
                   <p className="pt-1 mt-1 border-t border-slate-150 dark:border-slate-800 text-[10px] text-slate-500">Last Seen: {device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString() : 'N/A'}</p>
                 </div>
                 {/* Speech bubble pointer arrow */}
@@ -378,7 +384,7 @@ const DeviceDetailMapComp: React.FC<{
                 <div className="p-1 text-xs space-y-1 font-sans text-slate-700 dark:text-slate-200 leading-normal text-left pr-4">
                   <p className="font-bold border-b border-slate-150 dark:border-slate-800 pb-1 mb-1 text-slate-900 dark:text-white">{otherSelectedDevice.name || 'Unnamed Device'}</p>
                   <p className="text-[10px] text-slate-500 font-mono">EUI: {otherSelectedDevice.devEui}</p>
-                  <p>สถานะ: <span className={cn("font-bold", (otherSelectedDevice.lastSeenAt && (Date.now() - new Date(otherSelectedDevice.lastSeenAt).getTime()) / 3600000 <= 1) ? "text-emerald-500" : "text-rose-500")}>{(otherSelectedDevice.lastSeenAt && (Date.now() - new Date(otherSelectedDevice.lastSeenAt).getTime()) / 3600000 <= 1) ? "Online" : "Offline"}</span></p>
+                  <p>สถานะ: <span className={cn("font-bold", (otherSelectedDevice.lastSeenAt && (Date.now() - new Date(otherSelectedDevice.lastSeenAt).getTime()) / 3600000 <= 2) ? "text-emerald-500" : "text-rose-500")}>{(otherSelectedDevice.lastSeenAt && (Date.now() - new Date(otherSelectedDevice.lastSeenAt).getTime()) / 3600000 <= 2) ? "Online" : "Offline"}</span></p>
                   <div className="pt-1.5 pointer-events-auto">
                     <Link 
                       to={`/devices/${otherSelectedDevice.devEui}`}
@@ -420,8 +426,6 @@ interface DeviceData {
   state: string;
   batteryVoltage: number;
   soc: number;
-  generatedKwh: number;
-  energyUsedKwh: number;
   ledStatus: 'ON' | 'OFF';
   brightnessLevel: number;
   lat: number;
@@ -553,7 +557,36 @@ const getSchedulesForDevice = (devEuiStr: string, suppliedDevice?: any): Array<{
   ];
 };
 
-const createTelemetryForDevice = (devEuiStr: string, startStr: string, endStr: string, liveMetrics?: any): TelemetryHistory => {
+let lastKnown = {
+  brightness: null as number | null,
+  voltage: null as number | null,
+  soc: null as number | null,
+  temp: null as number | null,
+  ledCurrent: null as number | null,
+  panelCurrent: null as number | null,
+  batteryCurrent: null as number | null,
+};
+
+const createTelemetryForDevice = (
+  devEuiStr: string, 
+  startStr: string, 
+  endStr: string, 
+  liveMetrics?: any,
+  cloudRecords: any[] = [] // Accept cloud records to use real data
+): TelemetryHistory => {
+  // If the device has never been seen, return empty data for the graph.
+  if (!liveMetrics?.lastSeenAt) {
+    return {
+      labels: [],
+      voltage: [],
+      soc: [],
+      brightness: [],
+      temp: [],
+      ledCurrent: [],
+      batteryCurrent: [],
+      panelCurrent: []
+    };
+  }
   const start = new Date(startStr);
   const end = new Date(endStr);
   const diffMs = end.getTime() - start.getTime();
@@ -580,8 +613,62 @@ const createTelemetryForDevice = (devEuiStr: string, startStr: string, endStr: s
   const livePanelCur = liveMetrics?.panelCurrent !== undefined ? Number(liveMetrics.panelCurrent) : 0.0;
   const liveBatteryCur = liveMetrics?.batteryCurrent !== undefined ? Number(liveMetrics.batteryCurrent) : 0.0;
 
+  // --- MODIFIED: Pre-process cloudRecords for efficient lookup for ALL metrics ---
+  const getRecordVal = (record: any, keys: string[]) => {
+    for (const key of keys) {
+      if (record?.data?.[key] !== undefined) return record.data[key];
+      if (record?.object?.[key] !== undefined) return record.object[key];
+      if (record?.variables?.[key] !== undefined) return record.variables[key];
+      if (record?.[key] !== undefined) return record[key];
+    }
+    return null;
+  };
+
+  const realData = {
+      brightness: new Map<number, number>(),
+      voltage: new Map<number, number>(),
+      soc: new Map<number, number>(),
+      temp: new Map<number, number>(),
+      ledCurrent: new Map<number, number>(),
+      panelCurrent: new Map<number, number>(),
+      batteryCurrent: new Map<number, number>(),
+  };
+  const allRecordTimes = new Set<number>();
+
+  if (cloudRecords && cloudRecords.length > 0) {
+    cloudRecords.forEach(r => {
+      const dt = new Date(r.time || r.createdAt || r.timestamp);
+      if (isNaN(dt.getTime())) return;
+      const time = dt.getTime();
+      allRecordTimes.add(time);
+
+      const brightnessValue = getRecordVal(r, ['brightnessLevel', 'brightness']);
+      if (brightnessValue !== null) realData.brightness.set(time, Number(brightnessValue));
+      
+      const voltageValue = getRecordVal(r, ['batteryVoltage', 'battery_voltage', 'voltage']);
+      if (voltageValue !== null) realData.voltage.set(time, Number(voltageValue));
+
+      const socValue = getRecordVal(r, ['soc', 'batterySoc', 'battery_soc', 'batteryLevel', 'battery_level']);
+      if (socValue !== null) realData.soc.set(time, Number(socValue));
+
+      const tempValue = getRecordVal(r, ['controllerTemperature', 'controllerTemp', 'temperature', 'temp']);
+      if (tempValue !== null) realData.temp.set(time, Number(tempValue));
+
+      const ledCurrentValue = getRecordVal(r, ['ledCurrent', 'led_current']);
+      if (ledCurrentValue !== null) realData.ledCurrent.set(time, Number(ledCurrentValue));
+
+      const panelCurrentValue = getRecordVal(r, ['panelCurrent', 'panel_current']);
+      if (panelCurrentValue !== null) realData.panelCurrent.set(time, Number(panelCurrentValue));
+
+      const batteryCurrentValue = getRecordVal(r, ['batteryCurrent', 'battery_current']);
+      if (batteryCurrentValue !== null) realData.batteryCurrent.set(time, Number(batteryCurrentValue));
+    });
+  }
+  const sortedRecordTimes = Array.from(allRecordTimes).sort((a, b) => a - b);
+
+
   const todayStr = getTodayStr();
-  const isTodaySelected = (startStr === todayStr && endStr === todayStr);
+  const isTodaySelected = endStr === todayStr;
 
   const liveVoltsVal = liveMetrics?.batteryVoltage !== undefined ? Number(liveMetrics.batteryVoltage) : 25.8;
   const is12V = liveVoltsVal < 18;
@@ -634,34 +721,7 @@ const createTelemetryForDevice = (devEuiStr: string, startStr: string, endStr: s
         continue;
       }
 
-      // Physics-based base curves matching user's exact uploaded graph
-      // 1. Brightness Level (%) - Approach 2: Show ONLY real/actual values
-      let baseBrightness = 0;
-      const isNight = h >= 18 || h < 6;
-
-      if (isNight) {
-        const schedulesList = getSchedulesForDevice(devEuiStr, liveMetrics);
-        // Calculate elapsed minutes since Sunset (18:00)
-        let elapsedMins = 0;
-        if (h >= 18) {
-          elapsedMins = (h - 18) * 60 + m;
-        } else {
-          elapsedMins = (h + 6) * 60 + m;
-        }
-
-        let cumulativeMax = 0;
-        for (const slot of schedulesList) {
-          if (elapsedMins >= cumulativeMax && elapsedMins < cumulativeMax + slot.duration) {
-            baseBrightness = slot.brightness;
-            break;
-          }
-          cumulativeMax += slot.duration;
-        }
-      } else {
-        baseBrightness = 0; // Daytime is always off by default
-      }
-
-      // Check for any overridden brightness level from historical/active tests in local storage
+      // --- MODIFIED LOGIC FOR ALL METRICS ---
       const parts = startStr.split('-');
       const year = parseInt(parts[0], 10);
       const month = parseInt(parts[1], 10) - 1;
@@ -669,109 +729,138 @@ const createTelemetryForDevice = (devEuiStr: string, startStr: string, endStr: s
       const slotStart = new Date(year, month, day, h, m, 0).getTime();
       const slotEnd = slotStart + intervalMins * 60 * 1000;
 
-      const testOverride = getOverriddenBrightnessForSlot(devEuiStr, slotStart, slotEnd);
-      if (testOverride !== null) {
-        baseBrightness = testOverride;
-      }
-
-      // Apply seed shift to keep individual devices slightly unique but structural
-      const seedFactor = seedVal - 0.5; // -0.5 to +0.5
-
-      // 2. LED Current (A) - high when light is dynamically/scheduled ON, proportional to dimming settings
-      let baseLedCurrent = 0;
-      if (baseBrightness > 0) {
-        const peakLedCurrent = 1.75 + (seedFactor * 0.1) + (((i % 3) - 1) * 0.02);
-        baseLedCurrent = Number((peakLedCurrent * (baseBrightness / 100)).toFixed(2));
-      } else if (testOverride !== null && testOverride > 0) {
-        baseLedCurrent = Number((1.75 * (testOverride / 100)).toFixed(2));
-      }
-
-      // 3. Panel Current (A) - 0 at night, peaks during midday
-      let basePanelCurrent = 0;
-      if (h >= 6 && h <= 17) {
-        const hProgress = (h - 6 + (m / 60)) / 11; // 0 to 1 over daytime
-        const curve = Math.sin(hProgress * Math.PI);
-        // Deterministic noise using `i`
-        const deterministicNoise = (((i * 7) % 11) - 5) * 0.3; 
-        basePanelCurrent = Math.max(0, Number(((curve * 4.5) + deterministicNoise + (seedFactor * 0.5)).toFixed(2)));
-      }
-
-      // 4. Battery Current (A) - follows panel current closely during day
-      let baseBatteryCurrent = 0;
-      if (h >= 6 && h <= 17) {
-        const deterministicNoise = (((i * 3) % 7) - 3) * 0.4;
-        baseBatteryCurrent = Math.max(0, Number((basePanelCurrent + 0.5 + deterministicNoise).toFixed(2)));
-      }
-
-      // 5. State of Charge (SOC %)
-      // Drops slowly during discharge (18:00 to 05:00) from 100% to ~63%
-      // Climbs back during charging (06:00 to 14:00) to 100%
-      let baseSoc = 100;
-      if (h >= 18 || h <= 5) {
-        let hoursSinceSunset = h >= 18 ? (h - 18 + (m / 60)) : (h + 6 + (m / 60));
-        baseSoc = Math.max(30, Math.round(100 - hoursSinceSunset * 3.2));
-      } else {
-        if (h >= 6 && h <= 14) {
-          let hoursCharging = (h - 5.68) + (m / 60);
-          baseSoc = Math.min(100, Math.round(63 + hoursCharging * 4.4));
+      // Find the last known real values up to this time slot
+      for (const recordTime of sortedRecordTimes) {
+        if (recordTime <= slotStart) {
+          if (realData.brightness.has(recordTime)) lastKnown.brightness = realData.brightness.get(recordTime)!;
+          if (realData.voltage.has(recordTime)) lastKnown.voltage = realData.voltage.get(recordTime)!;
+          if (realData.soc.has(recordTime)) lastKnown.soc = realData.soc.get(recordTime)!;
+          if (realData.temp.has(recordTime)) lastKnown.temp = realData.temp.get(recordTime)!;
+          if (realData.ledCurrent.has(recordTime)) lastKnown.ledCurrent = realData.ledCurrent.get(recordTime)!;
+          if (realData.panelCurrent.has(recordTime)) lastKnown.panelCurrent = realData.panelCurrent.get(recordTime)!;
+          if (realData.batteryCurrent.has(recordTime)) lastKnown.batteryCurrent = realData.batteryCurrent.get(recordTime)!;
         } else {
-          baseSoc = 100;
+          break; // Optimization
         }
       }
 
-      if (testOverride !== null && testOverride > 0 && h >= 6 && h <= 17) {
-        // Daytime override: decrease state of charge slightly based on active LED current load
-        baseSoc = Math.max(20, baseSoc - 15);
+      // --- SIMULATION LOGIC (as fallback) ---
+      const seedFactor = seedVal - 0.5;
+      
+      // Brightness Simulation
+      let simulatedBrightness = 0;
+      const isNight = h >= 18 || h < 6;
+      if (isNight) {
+        const schedulesList = getSchedulesForDevice(devEuiStr, liveMetrics);
+        let elapsedMins = h >= 18 ? (h - 18) * 60 + m : (h + 24 - 18) * 60 + m;
+        let cumulativeMax = 0;
+        for (const slot of schedulesList) {
+          if (elapsedMins >= cumulativeMax && elapsedMins < cumulativeMax + slot.duration) {
+            simulatedBrightness = slot.brightness;
+            break;
+          }
+          cumulativeMax += slot.duration;
+        }
       }
 
-      baseSoc = Math.max(10, Math.min(100, Math.round(baseSoc + seedFactor * 4)));
-
-      // 6. Battery Voltage (V) - matching ~25.7V to 26.8V
-      let baseVolts = 26.2;
+      // Voltage Simulation
+      let simulatedVolts = 26.2;
       if (h >= 18 || h <= 5) {
         let hoursSinceSunset = h >= 18 ? (h - 18 + (m / 60)) : (h + 6 + (m / 60));
-        baseVolts = Number((26.35 - hoursSinceSunset * 0.05 + seedFactor * 0.2).toFixed(2));
+        simulatedVolts = Number((26.35 - hoursSinceSunset * 0.05 + seedFactor * 0.2).toFixed(2));
       } else {
         if (h >= 6 && h <= 14) {
           let chargeProgress = (h - 5.68) / 8.32;
-          baseVolts = Number((25.7 + chargeProgress * 1.1 + seedFactor * 0.2).toFixed(2));
+          simulatedVolts = Number((25.7 + chargeProgress * 1.1 + seedFactor * 0.2).toFixed(2));
         } else {
-          baseVolts = Number((26.8 - (h - 14) * 0.04 + seedFactor * 0.2).toFixed(2));
+          simulatedVolts = Number((26.8 - (h - 14) * 0.04 + seedFactor * 0.2).toFixed(2));
         }
       }
+      if (is12V) simulatedVolts = Number((simulatedVolts / 2).toFixed(2));
 
-      if (is12V) {
-        baseVolts = Number((baseVolts / 2).toFixed(2));
-      }
-
-      if (testOverride !== null && testOverride > 0) {
-        // Voltage sag under active LED load (scale sag for 12V)
-        baseVolts = Number((baseVolts - (is12V ? 0.22 : 0.45)).toFixed(2));
-      }
-
-      // 7. Controller Temp (°C) - drops at night (~28-30), rises during day (~45-50)
-      let baseTemp = 30;
-      if (h >= 6 && h <= 18) {
-        const hProgress = (h - 6 + (m / 60)) / 12; // 0 to 1
-        const curve = Math.sin(hProgress * Math.PI);
-        baseTemp = 30 + (curve * 18);
-      } else if (h > 18) {
-        const hProgress = (h - 18 + (m / 60)) / 6; // 0 to 1
-        baseTemp = 48 - (hProgress * 15);
+      // SOC Simulation
+      let simulatedSoc = 100;
+      if (h >= 18 || h <= 5) {
+        let hoursSinceSunset = h >= 18 ? (h - 18) : (h + 6);
+        simulatedSoc = Math.max(30, Math.round(100 - hoursSinceSunset * 3.5));
       } else {
-        const hProgress = (h + (m / 60)) / 6; // 0 to 1
-        baseTemp = 33 - (hProgress * 3);
+        if (h >= 6 && h < 9) simulatedSoc = 63;
+        else if (h >= 9 && h < 15) simulatedSoc = Math.min(98, Math.round(68 + (h - 9) * 4.0));
+        else simulatedSoc = Math.min(98, Math.round(68 + (15 - 9) * 4.0));
       }
-      baseTemp = Number((baseTemp + ((i % 5) - 2) * 0.5 + seedFactor * 2).toFixed(1));
+      simulatedSoc = Math.max(10, Math.min(100, Math.round(simulatedSoc + seedFactor * 4)));
+
+      // Temp Simulation
+      let simulatedTemp = 30;
+      if (h >= 6 && h <= 18) {
+        const hProgress = (h - 6 + (m / 60)) / 12;
+        simulatedTemp = 30 + (Math.sin(hProgress * Math.PI) * 18);
+      } else if (h > 18) {
+        const hProgress = (h - 18 + (m / 60)) / 6;
+        simulatedTemp = 48 - (hProgress * 15);
+      } else {
+        const hProgress = (h + (m / 60)) / 6;
+        simulatedTemp = 33 - (hProgress * 3);
+      }
+      simulatedTemp = Number((simulatedTemp + ((i % 5) - 2) * 0.5 + seedFactor * 2).toFixed(1));
+
+      // Panel Current Simulation
+      let simulatedPanelCurrent = 0;
+      if (h >= 6 && h <= 17) {
+        const hProgress = (h - 6 + (m / 60)) / 11;
+        const curve = Math.sin(hProgress * Math.PI);
+        const deterministicNoise = (((i * 7) % 11) - 5) * 0.3; 
+        simulatedPanelCurrent = Math.max(0, Number(((curve * 4.5) + deterministicNoise + (seedFactor * 0.5)).toFixed(2)));
+      }
+
+      // Battery Current Simulation
+      let simulatedBatteryCurrent = 0;
+      if (h >= 6 && h <= 17) {
+        const deterministicNoise = (((i * 3) % 7) - 3) * 0.4;
+        simulatedBatteryCurrent = Math.max(0, Number((simulatedPanelCurrent + 0.5 + deterministicNoise).toFixed(2)));
+      }
+
+      // --- FINAL VALUE SELECTION (Real Data OR Fallback to Simulation) ---
+      let finalBrightness = lastKnown.brightness ?? simulatedBrightness;
+      let finalVolt = lastKnown.voltage ?? simulatedVolts;
+      let finalSoc = lastKnown.soc ?? simulatedSoc;
+      let finalTemp = lastKnown.temp ?? simulatedTemp;
+      let finalPanelCurrent = lastKnown.panelCurrent ?? simulatedPanelCurrent;
+      let finalBatteryCurrent = lastKnown.batteryCurrent ?? simulatedBatteryCurrent;
+
+      // Check for manual override on brightness
+      const testOverride = getOverriddenBrightnessForSlot(devEuiStr, slotStart, slotEnd);
+      if (testOverride !== null) {
+        finalBrightness = testOverride;
+      }
+
+      // LED Current is derived from final brightness
+      let finalLedCurrent = 0;
+      if (lastKnown.ledCurrent !== null) {
+          finalLedCurrent = lastKnown.ledCurrent;
+      } else if (finalBrightness > 0) {
+        const peakLedCurrent = 1.75 + (seedFactor * 0.1) + (((i % 3) - 1) * 0.02);
+        finalLedCurrent = Number((peakLedCurrent * (finalBrightness / 100)).toFixed(2));
+      }
+      
+      // Apply voltage sag if light is on (from real or override)
+      if (finalBrightness > 0) {
+        finalVolt = Number((finalVolt - (is12V ? 0.22 : 0.45)).toFixed(2));
+      }
+      
+      // Apply SOC drop if light is on during daytime (override)
+      if (finalBrightness > 0 && h >= 6 && h <= 17) {
+        finalSoc = Math.max(20, finalSoc - 15);
+      }
 
       // 8. Blend / Smoothly interpolate to ending live metrics at index lastNonNullIndex
-      let finalVolt = baseVolts;
-      let finalSoc = baseSoc;
-      let finalBrightness = baseBrightness;
-      let finalTemp = baseTemp;
-      let finalLedCurrent = baseLedCurrent;
-      let finalPanelCurrent = basePanelCurrent;
-      let finalBatteryCurrent = baseBatteryCurrent;
+      let blendedVolt = finalVolt;
+      let blendedSoc = finalSoc;
+      let blendedBrightness = finalBrightness;
+      let blendedTemp = finalTemp;
+      let blendedLedCurrent = finalLedCurrent;
+      let blendedPanelCurrent = finalPanelCurrent;
+      let blendedBatteryCurrent = finalBatteryCurrent;
 
       if (isTodaySelected && liveMetrics && lastNonNullIndex >= 0) {
         // Blend dynamically starting 6 points prior up to lastNonNullIndex to keep curves connected and elegant
@@ -779,91 +868,271 @@ const createTelemetryForDevice = (devEuiStr: string, startStr: string, endStr: s
         if (i >= blendStart) {
           const factor = (i - blendStart) / (lastNonNullIndex - blendStart || 1);
           
-          const liveVolts = liveMetrics.batteryVoltage !== undefined ? liveMetrics.batteryVoltage : baseVolts;
-          const liveSoc = liveMetrics.soc !== undefined ? liveMetrics.soc : baseSoc;
-          const liveBrightness = liveMetrics.brightnessLevel !== undefined ? liveMetrics.brightnessLevel : baseBrightness;
-          const liveTemp = liveMetrics.controllerTemp !== undefined ? liveMetrics.controllerTemp : baseTemp;
-          const liveLedCurrent = liveMetrics.ledCurrent !== undefined ? liveMetrics.ledCurrent : baseLedCurrent;
-          const livePanelCurrent = liveMetrics.panelCurrent !== undefined ? liveMetrics.panelCurrent : basePanelCurrent;
-          const liveBatteryCurrent = liveMetrics.batteryCurrent !== undefined ? liveMetrics.batteryCurrent : baseBatteryCurrent;
+          const liveVolts = liveMetrics.batteryVoltage !== undefined ? liveMetrics.batteryVoltage : finalVolt;
+          const liveSoc = liveMetrics.soc !== undefined ? liveMetrics.soc : finalSoc;
+          const liveBrightness = liveMetrics.brightnessLevel !== undefined ? liveMetrics.brightnessLevel : finalBrightness;
+          const liveTemp = liveMetrics.controllerTemp !== undefined ? liveMetrics.controllerTemp : finalTemp;
+          const liveLedCurrent = liveMetrics.ledCurrent !== undefined ? liveMetrics.ledCurrent : finalLedCurrent;
+          const livePanelCurrent = liveMetrics.panelCurrent !== undefined ? liveMetrics.panelCurrent : finalPanelCurrent;
+          const liveBatteryCurrent = liveMetrics.batteryCurrent !== undefined ? liveMetrics.batteryCurrent : finalBatteryCurrent;
 
-          finalVolt = Number(((1 - factor) * baseVolts + factor * liveVolts).toFixed(2));
-          finalSoc = Math.max(0, Math.min(100, Math.round((1 - factor) * baseSoc + factor * liveSoc)));
+          blendedVolt = Number(((1 - factor) * finalVolt + factor * liveVolts).toFixed(2));
+          blendedSoc = Math.max(0, Math.min(100, Math.round((1 - factor) * finalSoc + factor * liveSoc)));
           if (i === lastNonNullIndex) {
-            finalBrightness = liveBrightness;
+            blendedBrightness = liveBrightness;
           }
-          finalTemp = Number(((1 - factor) * baseTemp + factor * liveTemp).toFixed(1));
-          finalLedCurrent = Number(((1 - factor) * baseLedCurrent + factor * liveLedCurrent).toFixed(2));
-          finalPanelCurrent = Number(((1 - factor) * basePanelCurrent + factor * livePanelCurrent).toFixed(2));
-          finalBatteryCurrent = Number(((1 - factor) * baseBatteryCurrent + factor * liveBatteryCurrent).toFixed(2));
+          blendedTemp = Number(((1 - factor) * finalTemp + factor * liveTemp).toFixed(1));
+          blendedLedCurrent = Number(((1 - factor) * finalLedCurrent + factor * liveLedCurrent).toFixed(2));
+          blendedPanelCurrent = Number(((1 - factor) * finalPanelCurrent + factor * livePanelCurrent).toFixed(2));
+          blendedBatteryCurrent = Number(((1 - factor) * finalBatteryCurrent + factor * liveBatteryCurrent).toFixed(2));
         }
       }
 
-      voltage.push(finalVolt);
-      soc.push(finalSoc);
-      brightness.push(finalBrightness);
-      temp.push(finalTemp);
-      ledCurrent.push(finalLedCurrent);
-      panelCurrent.push(finalPanelCurrent);
-      batteryCurrent.push(finalBatteryCurrent);
+      voltage.push(blendedVolt);
+      soc.push(blendedSoc);
+      brightness.push(blendedBrightness);
+      temp.push(blendedTemp);
+      ledCurrent.push(blendedLedCurrent);
+      panelCurrent.push(blendedPanelCurrent);
+      batteryCurrent.push(blendedBatteryCurrent);
+    }
+
+    // If today, adjust the last label to be the exact current time for a "live" feel.
+    // The data for this point is already blended towards the live metrics.
+    if (isTodaySelected) {
+        const now = new Date();
+        const h = now.getHours();
+        const m = now.getMinutes();
+        const labelStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+        
+        if (labels.length > 0) {
+            labels[labels.length - 1] = `${shortDatePrefix} ${labelStr}`;
+        }
     }
   } else {
-    const maxPts = Math.min(30, diffDays);
-    for (let i = 0; i < maxPts; i++) {
-      const currentDate = new Date(start);
-      currentDate.setDate(start.getDate() + Math.round((i * (diffDays - 1)) / (maxPts - 1 || 1)));
-      
-      const curYear = currentDate.getFullYear();
-      const month = String(currentDate.getMonth() + 1).padStart(2, '0');
-      const day = String(currentDate.getDate()).padStart(2, '0');
-      labels.push(formatThaiDateShort(`${curYear}-${month}-${day}`));
+    if (diffDays <= 8) {
+      // NEW DETAILED LOGIC FOR UP TO A WEEK (HOURLY)
+      // --- MODIFIED: This block now uses real data with simulation as a fallback ---
+      const nowObj = new Date();
+      const todayStr = getTodayStr();
 
-      const seedFactor = (currentDate.getDate() % 10) / 10;
+      for (let dayOffset = 0; dayOffset < diffDays; dayOffset++) {
+          const currentDay = new Date(start.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+          const currentDayStr = currentDay.toISOString().split('T')[0];
+          const shortDatePrefix = formatThaiDateShort(currentDayStr);
 
-      let vVal = Number((25.5 + seedFactor * 0.82 + seedVal * 0.2).toFixed(1));
-      if (is12V) {
-        vVal = Number((vVal / 2).toFixed(1));
+          // Use hourly intervals for multi-day detailed view
+          const slotsPerDay = 24; 
+
+          for (let i = 0; i < slotsPerDay; i++) {
+              const h = i;
+              const m = 0;
+              const labelStr = `${String(h).padStart(2, '0')}:00`;
+
+              const isFuture = currentDayStr > todayStr || (currentDayStr === todayStr && h > nowObj.getHours());
+              if (isFuture) continue;
+
+              labels.push(`${shortDatePrefix} ${labelStr}`);
+
+              // --- Find last known real values up to this time slot ---
+              const slotStart = new Date(currentDay.getFullYear(), currentDay.getMonth(), currentDay.getDate(), h, m, 0).getTime();
+              for (const recordTime of sortedRecordTimes) {
+                if (recordTime <= slotStart) {
+                  if (realData.brightness.has(recordTime)) lastKnown.brightness = realData.brightness.get(recordTime)!;
+                  if (realData.voltage.has(recordTime)) lastKnown.voltage = realData.voltage.get(recordTime)!;
+                  if (realData.soc.has(recordTime)) lastKnown.soc = realData.soc.get(recordTime)!;
+                  if (realData.temp.has(recordTime)) lastKnown.temp = realData.temp.get(recordTime)!;
+                  if (realData.ledCurrent.has(recordTime)) lastKnown.ledCurrent = realData.ledCurrent.get(recordTime)!;
+                  if (realData.panelCurrent.has(recordTime)) lastKnown.panelCurrent = realData.panelCurrent.get(recordTime)!;
+                  if (realData.batteryCurrent.has(recordTime)) lastKnown.batteryCurrent = realData.batteryCurrent.get(recordTime)!;
+                } else {
+                  break; // Optimization
+                }
+              }
+
+              // --- Simulation logic (as fallback) ---
+              const seedFactor = seedVal - 0.5;
+              let simulatedBrightness = 0;
+              const isNight = h >= 18 || h < 6;
+              if (isNight) {
+                  const schedulesList = getSchedulesForDevice(devEuiStr, liveMetrics);
+                  let elapsedMins = h >= 18 ? (h - 18) * 60 : (h + 24 - 18) * 60;
+                  let cumulativeMax = 0;
+                  for (const slot of schedulesList) {
+                      if (elapsedMins >= cumulativeMax && elapsedMins < cumulativeMax + slot.duration) {
+                          simulatedBrightness = slot.brightness;
+                          break;
+                      }
+                      cumulativeMax += slot.duration;
+                  }
+              }
+
+              let simulatedSoc = 100;
+              if (h >= 18 || h <= 5) {
+                  let hoursSinceSunset = h >= 18 ? (h - 18) : (h + 6);
+                  simulatedSoc = Math.max(30, Math.round(100 - hoursSinceSunset * 3.5));
+              } else {
+                  if (h >= 6 && h < 9) simulatedSoc = 63;
+                  else if (h >= 9 && h < 15) simulatedSoc = Math.min(98, Math.round(68 + (h - 9) * 4.0));
+                  else simulatedSoc = Math.min(98, Math.round(68 + (15 - 9) * 4.0));
+              }
+              simulatedSoc = Math.max(10, Math.min(100, Math.round(simulatedSoc + seedFactor * 4)));
+
+              let simulatedVolts = 26.2;
+              if (h >= 18 || h <= 5) {
+                  let hoursSinceSunset = h >= 18 ? (h - 18) : (h + 6);
+                  simulatedVolts = Number((26.35 - hoursSinceSunset * 0.05 + seedFactor * 0.2).toFixed(2));
+              } else {
+                  if (h >= 6 && h <= 14) simulatedVolts = Number((25.7 + ((h - 5.68) / 8.32) * 1.1 + seedFactor * 0.2).toFixed(2));
+                  else simulatedVolts = Number((26.8 - (h - 14) * 0.04 + seedFactor * 0.2).toFixed(2));
+              }
+              if (is12V) simulatedVolts = Number((simulatedVolts / 2).toFixed(2));
+
+              let simulatedTemp = 30;
+              if (h >= 6 && h <= 18) simulatedTemp = 30 + (Math.sin(((h - 6) / 12) * Math.PI) * 18);
+              else if (h > 18) simulatedTemp = 48 - (((h - 18) / 6) * 15);
+              else simulatedTemp = 33 - ((h / 6) * 3);
+              simulatedTemp = Number((simulatedTemp + ((i % 5) - 2) * 0.5 + seedFactor * 2).toFixed(1));
+
+              let simulatedPanelCurrent = 0;
+              if (h >= 6 && h <= 17) simulatedPanelCurrent = Math.max(0, Number(((Math.sin(((h - 6) / 11) * Math.PI) * 4.5) + (((i * 7) % 11) - 5) * 0.3 + (seedFactor * 0.5)).toFixed(2)));
+
+              let simulatedBatteryCurrent = 0;
+              if (h >= 6 && h <= 17) simulatedBatteryCurrent = Math.max(0, Number((simulatedPanelCurrent + 0.5 + (((i * 3) % 7) - 3) * 0.4).toFixed(2)));
+
+              // --- FINAL VALUE SELECTION (Real Data OR Fallback to Simulation) ---
+              let finalBrightness = lastKnown.brightness ?? simulatedBrightness;
+              let finalSoc = lastKnown.soc ?? simulatedSoc;
+              let finalVolt = lastKnown.voltage ?? simulatedVolts;
+              let finalTemp = lastKnown.temp ?? simulatedTemp;
+              let finalPanelCurrent = lastKnown.panelCurrent ?? simulatedPanelCurrent;
+              let finalBatteryCurrent = lastKnown.batteryCurrent ?? simulatedBatteryCurrent;
+
+              const parts = currentDayStr.split('-');
+              const slotEnd = slotStart + 60 * 60 * 1000;
+              const testOverride = getOverriddenBrightnessForSlot(devEuiStr, slotStart, slotEnd);
+              if (testOverride !== null) finalBrightness = testOverride;
+
+              let finalLedCurrent = 0;
+              if (lastKnown.ledCurrent !== null) {
+                  finalLedCurrent = lastKnown.ledCurrent;
+              } else if (finalBrightness > 0) {
+                  finalLedCurrent = Number(((1.75 + (seedFactor * 0.1)) * (finalBrightness / 100)).toFixed(2));
+              }
+
+              if (finalBrightness > 0) {
+                  finalVolt = Number((finalVolt - (is12V ? 0.22 : 0.45)).toFixed(2));
+              }
+              if (finalBrightness > 0 && h >= 6 && h <= 17) {
+                  finalSoc = Math.max(20, finalSoc - 15);
+              }
+
+              brightness.push(finalBrightness);
+              soc.push(finalSoc);
+              voltage.push(finalVolt);
+              temp.push(finalTemp);
+              ledCurrent.push(finalLedCurrent);
+              panelCurrent.push(finalPanelCurrent);
+              batteryCurrent.push(finalBatteryCurrent);
+          }
       }
-      let sVal = Math.min(100, Math.round(82 + seedFactor * 13 + seedVal * 5));
+    } else {
+      // --- MODIFIED: This block now uses daily averages from real data with simulation as a fallback ---
+      const maxPts = Math.min(30, diffDays);
 
-      // Calculate daily average brightness dynamically based on configured street lamp schedule durations
-      const schedulesList = getSchedulesForDevice(devEuiStr, liveMetrics);
-      let totalMins = 0;
-      let totalWeightedBrightness = 0;
-      schedulesList.forEach(slot => {
-        totalMins += slot.duration;
-        totalWeightedBrightness += slot.brightness * slot.duration;
-      });
-      const dailyAvgBrightness = totalMins > 0 ? Number((totalWeightedBrightness / 1440).toFixed(1)) : 12.5;
-      let bVal = Math.round(dailyAvgBrightness + seedFactor * 3 + seedVal * 2);
+      const dailyAggregates = new Map<string, { [key in keyof typeof realData]?: number[] }>();
+      if (cloudRecords.length > 0) {
+          cloudRecords.forEach(r => {
+              const dt = new Date(r.time || r.createdAt || r.timestamp);
+              if (isNaN(dt.getTime())) return;
+              const dayStr = dt.toISOString().split('T')[0];
 
-      // Mock daily average/peak values
-      const tempNoise = (seedFactor * 4) + (((i % 7) - 3) * 1.5);
-      let tVal = Number((40 + tempNoise).toFixed(1)); // Daily avg temp ~40
+              if (!dailyAggregates.has(dayStr)) {
+                  dailyAggregates.set(dayStr, { voltage: [], soc: [], brightness: [], temp: [], ledCurrent: [], panelCurrent: [], batteryCurrent: [] });
+              }
+              const dayData = dailyAggregates.get(dayStr)!;
 
-      let ledCurrVal = Number((1.75 + (seedFactor * 0.1)).toFixed(2)); // avg night LED current
-      let panelCurrVal = Number((3.5 + (seedFactor * 0.5)).toFixed(2)); // avg day Panel current
-      let batteryCurrVal = Number((3.8 + (seedFactor * 0.5)).toFixed(2)); // avg day Battery current
+              const metricKeys: { key: keyof typeof realData, apiKeys: string[] }[] = [
+                  { key: 'voltage', apiKeys: ['batteryVoltage', 'battery_voltage', 'voltage'] },
+                  { key: 'soc', apiKeys: ['soc', 'batterySoc', 'battery_soc', 'batteryLevel', 'battery_level'] },
+                  { key: 'brightness', apiKeys: ['brightnessLevel', 'brightness'] },
+                  { key: 'temp', apiKeys: ['controllerTemperature', 'controllerTemp', 'temperature', 'temp'] },
+                  { key: 'ledCurrent', apiKeys: ['ledCurrent', 'led_current'] },
+                  { key: 'panelCurrent', apiKeys: ['panelCurrent', 'panel_current'] },
+                  { key: 'batteryCurrent', apiKeys: ['batteryCurrent', 'battery_current'] },
+              ];
 
-      // If last point corresponds to today, blend with live metrics
-      const isPointToday = (currentDate.toDateString() === new Date().toDateString());
-      if (isPointToday && liveMetrics) {
-        vVal = liveMetrics.batteryVoltage !== undefined ? liveMetrics.batteryVoltage : vVal;
-        sVal = liveMetrics.soc !== undefined ? liveMetrics.soc : sVal;
-        bVal = liveMetrics.brightnessLevel !== undefined ? liveMetrics.brightnessLevel : bVal;
-        tVal = liveMetrics.controllerTemp !== undefined ? liveMetrics.controllerTemp : tVal;
-        ledCurrVal = liveMetrics.ledCurrent !== undefined ? liveMetrics.ledCurrent : ledCurrVal;
-        panelCurrVal = liveMetrics.panelCurrent !== undefined ? liveMetrics.panelCurrent : panelCurrVal;
-        batteryCurrVal = liveMetrics.batteryCurrent !== undefined ? liveMetrics.batteryCurrent : batteryCurrVal;
+              metricKeys.forEach(({ key, apiKeys }) => {
+                  const val = getRecordVal(r, apiKeys);
+                  if (val !== null) dayData[key]?.push(Number(val));
+              });
+          });
       }
+      const calculateAverage = (arr?: number[]) => (arr && arr.length > 0) ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
 
-      voltage.push(vVal);
-      soc.push(sVal);
-      brightness.push(bVal);
-      temp.push(tVal);
-      ledCurrent.push(ledCurrVal);
-      panelCurrent.push(panelCurrVal);
-      batteryCurrent.push(batteryCurrVal);
+      for (let i = 0; i < maxPts; i++) {
+        const currentDate = new Date(start);
+        currentDate.setDate(start.getDate() + Math.round((i * (diffDays - 1)) / (maxPts - 1 || 1)));
+        
+        const curYear = currentDate.getFullYear();
+        const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+        const day = String(currentDate.getDate()).padStart(2, '0');
+        const dayStr = `${curYear}-${month}-${day}`;
+        labels.push(formatThaiDateShort(dayStr));
+
+        const aggregates = dailyAggregates.get(dayStr);
+        const seedFactor = (currentDate.getDate() % 10) / 10;
+
+        let vVal = calculateAverage(aggregates?.voltage);
+        let sVal = calculateAverage(aggregates?.soc);
+        let bVal = calculateAverage(aggregates?.brightness);
+        let tVal = calculateAverage(aggregates?.temp);
+        let ledCurrVal = calculateAverage(aggregates?.ledCurrent);
+        let panelCurrVal = calculateAverage(aggregates?.panelCurrent);
+        let batteryCurrVal = calculateAverage(aggregates?.batteryCurrent);
+
+        // Fallback to simulation if no real data for the day
+        if (vVal === null) {
+            vVal = Number((25.5 + seedFactor * 0.82 + seedVal * 0.2).toFixed(1));
+            if (is12V) vVal = Number((vVal / 2).toFixed(1));
+        }
+        if (sVal === null) sVal = Math.min(100, Math.round(82 + seedFactor * 13 + seedVal * 5));
+        if (bVal === null) {
+            const schedulesList = getSchedulesForDevice(devEuiStr, liveMetrics);
+            let totalMins = 0;
+            let totalWeightedBrightness = 0;
+            schedulesList.forEach(slot => {
+                totalMins += slot.duration;
+                totalWeightedBrightness += slot.brightness * slot.duration;
+            });
+            const dailyAvgBrightness = totalMins > 0 ? Number((totalWeightedBrightness / 1440).toFixed(1)) : 12.5;
+            bVal = Math.round(dailyAvgBrightness + seedFactor * 3 + seedVal * 2);
+        }
+        if (tVal === null) tVal = Number((40 + (seedFactor * 4) + (((i % 7) - 3) * 1.5)).toFixed(1));
+        if (ledCurrVal === null) ledCurrVal = Number((1.75 + (seedFactor * 0.1)).toFixed(2));
+        if (panelCurrVal === null) panelCurrVal = Number((3.5 + (seedFactor * 0.5)).toFixed(2));
+        if (batteryCurrVal === null) batteryCurrVal = Number((3.8 + (seedFactor * 0.5)).toFixed(2));
+
+        // If last point corresponds to today, blend with live metrics
+        const isPointToday = (currentDate.toDateString() === new Date().toDateString());
+        if (isPointToday && liveMetrics) {
+          vVal = liveMetrics.batteryVoltage !== undefined ? liveMetrics.batteryVoltage : vVal;
+          sVal = liveMetrics.soc !== undefined ? liveMetrics.soc : sVal;
+          bVal = liveMetrics.brightnessLevel !== undefined ? liveMetrics.brightnessLevel : bVal;
+          tVal = liveMetrics.controllerTemp !== undefined ? liveMetrics.controllerTemp : tVal;
+          ledCurrVal = liveMetrics.ledCurrent !== undefined ? liveMetrics.ledCurrent : ledCurrVal;
+          panelCurrVal = liveMetrics.panelCurrent !== undefined ? liveMetrics.panelCurrent : panelCurrVal;
+          batteryCurrVal = liveMetrics.batteryCurrent !== undefined ? liveMetrics.batteryCurrent : batteryCurrVal;
+        }
+
+        voltage.push(vVal);
+        soc.push(sVal);
+        brightness.push(bVal);
+        temp.push(tVal);
+        ledCurrent.push(ledCurrVal);
+        panelCurrent.push(panelCurrVal);
+        batteryCurrent.push(batteryCurrVal);
+      }
     }
   }
 
@@ -887,24 +1156,114 @@ const DeviceDetail: React.FC = () => {
     message: '',
     type: 'success'
   });
+  const [periodTotals, setPeriodTotals] = useState<{ generated: number; used: number } | null>(null);
+  const [accumulatedEnergy, setAccumulatedEnergy] = useState<{ generated: number; used: number } | null>(null);
+  const [loadingAccumulated, setLoadingAccumulated] = useState(true);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchAccumulated = async () => {
+      if (!devEui) return;
+      setLoadingAccumulated(true);
+
+      try {
+        const veryStartDate = "2020-01-01T00:00:00Z";
+        const now = new Date().toISOString();
+        const response = await DeviceService.getDeviceRecords(devEui, veryStartDate, now, 5000);
+        const records = response.data?.records || [];
+
+        let baseGenerated = 0;
+        let baseUsed = 0;
+
+        // If the device has a significant history (>1 record), apply a seeded base value for continuity.
+        // Otherwise, for new devices (0 or 1 record), start counting from 0.
+        if (records.length > 1) {
+          const devEuiSeed = (devEui || '0e0b894ac6e1fa28').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+          baseGenerated = 110.45 + (devEuiSeed % 340);
+          const usageRatio = 0.60 + ((devEuiSeed % 35) / 100);
+          baseUsed = baseGenerated * usageRatio;
+        }
+        
+        let deltaGeneratedKwh = 0;
+        let deltaUsedKwh = 0;
+
+        if (records.length > 1) {
+            const getVal = (record: any, keys: string[]) => {
+                for (const key of keys) {
+                    if (record[key] !== undefined && record[key] !== null) return Number(record[key]);
+                    if (record.variables?.[key] !== undefined && record.variables?.[key] !== null) return Number(record.variables[key]);
+                    if (record.object?.[key] !== undefined && record.object?.[key] !== null) return Number(record.object[key]);
+                }
+                return null;
+            };
+
+            for (let i = 1; i < records.length; i++) {
+                const prev = records[i - 1];
+                const curr = records[i];
+                const prevTime = new Date(prev.time || prev.createdAt || prev.timestamp).getTime();
+                const currTime = new Date(curr.time || curr.createdAt || curr.timestamp).getTime();
+                const elapsedHours = (currTime - prevTime) / (1000 * 60 * 60);
+
+                if (elapsedHours <= 0 || elapsedHours > 48) continue;
+
+                const panelVoltage = getVal(prev, ['panelVoltage', 'panel_voltage']);
+                const panelCurrent = getVal(prev, ['panelCurrent', 'panel_current']);
+                const batteryVoltage = getVal(prev, ['batteryVoltage', 'battery_voltage']);
+                const ledCurrent = getVal(prev, ['ledCurrent', 'led_current']);
+
+                const chargingPowerW = (panelVoltage || 0) * (panelCurrent || 0);
+                const consumptionPowerW = (batteryVoltage || 0) * (ledCurrent || 0);
+
+                deltaGeneratedKwh += (chargingPowerW * elapsedHours) / 1000;
+                deltaUsedKwh += (consumptionPowerW * elapsedHours) / 1000;
+            }
+        }
+        
+        if (isMounted) {
+          setAccumulatedEnergy({ generated: baseGenerated + deltaGeneratedKwh, used: baseUsed + deltaUsedKwh });
+        }
+      } catch (err) {
+        console.warn("Could not fetch full history for accumulated energy, using base mock.", err);
+        // Fallback for when API fails: use a simple mock so the UI doesn't break.
+        const devEuiSeed = (devEui || '0e0b894ac6e1fa28').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+        const fallbackGenerated = 110.45 + (devEuiSeed % 340);
+        const fallbackUsed = fallbackGenerated * (0.60 + ((devEuiSeed % 35) / 100));
+        if (isMounted) {
+          setAccumulatedEnergy({ generated: fallbackGenerated, used: fallbackUsed });
+        }
+      } finally {
+        if (isMounted) setLoadingAccumulated(false);
+      }
+    };
+
+    fetchAccumulated();
+    return () => { isMounted = false; };
+  }, [devEui]);
 
   // Fetch all other devices in the same application
   useEffect(() => {
+    let isMounted = true;
     const fetchAllDevices = async () => {
       if (!user?.applicationId) return;
       try {
         const res = await api.get('/devices', { params: { applicationId: user.applicationId, limit: 100 } });
-        if (res.data && res.data.result) {
+        if (isMounted && res.data && res.data.result) {
           setOtherDevices(res.data.result);
         }
       } catch (err) {
         console.error("Failed to fetch all application devices for map view:", err);
       }
     };
+
     fetchAllDevices();
     if (refreshInterval === null) return;
+
     const interval = setInterval(fetchAllDevices, refreshInterval * 1000);
-    return () => clearInterval(interval);
+    
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, [user?.applicationId, refreshInterval]);
 
   // Auto-hide toast
@@ -923,34 +1282,7 @@ const DeviceDetail: React.FC = () => {
     lastAccumulateTimeRef.current = null;
   }, [devEui]);
 
-  const initialStorageKey = devEui || "0e0b894ac6e1fa28";
-  const savedGenStr = localStorage.getItem(`accumulated_generated_${initialStorageKey}`);
-  const savedUsedStr = localStorage.getItem(`accumulated_energy_used_${initialStorageKey}`);
-  const initialGenerated = savedGenStr ? parseFloat(savedGenStr) : 0.0;
-  const initialUsed = savedUsedStr ? parseFloat(savedUsedStr) : 0.0;
-
-  // Mock data setup
-  const [device, setDevice] = useState<DeviceData | null>({
-    name: "Solar Street Light: Teset-RD130526",
-    devEui: devEui || "0e0b894ac6e1fa28",
-    status: "Online",
-    state: "Charging",
-    batteryVoltage: 25.8,
-    soc: 63,
-    generatedKwh: initialGenerated,
-    energyUsedKwh: initialUsed,
-    ledStatus: "OFF",
-    brightnessLevel: 0,
-    ledCurrent: 0,
-    lat: 13.58797,
-    lng: 100.31238,
-    panelVoltage: 25.2,
-    panelCurrent: 0,
-    batteryCurrent: 0,
-    surfaceTemp: 23,
-    controllerTemp: 26,
-    lastSeenAt: new Date(Date.now() - 5 * 60000).toISOString() // 5 mins ago
-  });
+  const [device, setDevice] = useState<DeviceData | null>(null);
 
   const deviceRef = useRef<any>(null);
   const multiAxisChartRef = useRef<any>(null);
@@ -973,6 +1305,8 @@ const DeviceDetail: React.FC = () => {
   const [maxValues, setMaxValues] = useState({ voltage: 25.8, temp: 26 });
 
   useEffect(() => {
+    let isMounted = true;
+
     const fetchDevice = async () => {
       if (!devEui) return;
       try {
@@ -980,9 +1314,12 @@ const DeviceDetail: React.FC = () => {
         const dev = res.data.device;
         const prod = res.data.product;
         const lastSeenAt = res.data.lastSeenAt;
-        if (dev) {
+        if (dev && isMounted) {
           setIsLoaded(true);
           setDevice(prev => {
+            const finalLastSeenAt = lastSeenAt || dev.lastSeenAt;
+            const hasEverBeenSeen = !!finalLastSeenAt;
+
             const getVal = (key: string, backupKey?: string) => {
                if (dev.variables?.[key] !== undefined) return dev.variables[key];
                if (backupKey && dev.variables?.[backupKey] !== undefined) return dev.variables[backupKey];
@@ -1006,8 +1343,7 @@ const DeviceDetail: React.FC = () => {
                temp: Math.max(m.temp, controllerTemp || 0)
             }));
 
-            const finalLastSeenAt = lastSeenAt || dev.lastSeenAt;
-            const activeTest = getActiveTestStatus(dev.devEui || prev!.devEui);
+            const activeTest = getActiveTestStatus(dev.devEui || prev?.devEui || '');
             const finalLedStatus = (ledCurrent !== undefined && ledCurrent > 0) ? 'ON' : 'OFF';
             const finalBrightnessLevel = brightnessLevel;
 
@@ -1051,91 +1387,32 @@ const DeviceDetail: React.FC = () => {
             if (isTesting || (isDaytime && isLedOn)) {
               computedState = "Discharger";
             } else if (isLedOn) {
-              computedState = "Discharger";
+              computedState = "Discharging";
             } else if (isDaytime || isBatteryCharging) {
               computedState = "Charging";
             }
 
-            // Calculate real-time accumulations
-            const nowTime = Date.now();
-            let elapsedHours = 0;
-            if (lastAccumulateTimeRef.current !== null) {
-              const elapsedSeconds = (nowTime - lastAccumulateTimeRef.current) / 1000;
-              const capSeconds = refreshInterval ? refreshInterval * 3 : 360;
-              const finalElapsedSeconds = Math.max(0, Math.min(elapsedSeconds, capSeconds));
-              elapsedHours = finalElapsedSeconds / 3600;
-            }
-            lastAccumulateTimeRef.current = nowTime;
-
-            const chargingPowerW = (panelVoltage || 0) * (panelCurrent || 0);
-            const consumptionPowerW = (batteryVoltage || 0) * (ledCurrent || 0);
-
-            const generatedDeltaKwh = (chargingPowerW * elapsedHours) / 1000;
-            const usedDeltaKwh = (consumptionPowerW * elapsedHours) / 1000;
-
-            const storageKeyEui = devEui || dev.devEui || "0e0b894ac6e1fa28";
-            const savedGen = localStorage.getItem(`accumulated_generated_${storageKeyEui}`);
-            const savedUsed = localStorage.getItem(`accumulated_energy_used_${storageKeyEui}`);
-
-            // Helper to fetch real device variables from API
-            const getRealVariable = (keys: string[]) => {
-              for (const k of keys) {
-                if (dev.variables?.[k] !== undefined && dev.variables[k] !== null && dev.variables[k] !== "") {
-                  const parsed = parseFloat(dev.variables[k]);
-                  if (!isNaN(parsed)) return parsed;
-                }
-              }
-              return null;
-            };
-
-            const realBaseGen = getRealVariable(['generatedKwh', 'generated_kwh', 'generated', 'generatedKWH']);
-            const realBaseUsed = getRealVariable(['energyUsedKwh', 'energy_used_kwh', 'energyUsed', 'energy_used', 'energyUsedKWH']);
-
-            let currentGen = 0.0;
-            if (savedGen !== null) {
-              currentGen = parseFloat(savedGen);
-            } else if (realBaseGen !== null) {
-              currentGen = realBaseGen;
-            }
-
-            let currentUsed = 0.0;
-            if (savedUsed !== null) {
-              currentUsed = parseFloat(savedUsed);
-            } else if (realBaseUsed !== null) {
-              currentUsed = realBaseUsed;
-            }
-
-            if (elapsedHours > 0) {
-              currentGen += generatedDeltaKwh;
-              currentUsed += usedDeltaKwh;
-            }
-
-            localStorage.setItem(`accumulated_generated_${storageKeyEui}`, currentGen.toFixed(6));
-            localStorage.setItem(`accumulated_energy_used_${storageKeyEui}`, currentUsed.toFixed(6));
-
             return {
-              ...prev!,
-              name: dev.name || prev!.name,
-              devEui: dev.devEui || prev!.devEui,
+              ...(prev || {}),
+              name: dev.name || prev?.name || '',
+              devEui: dev.devEui || prev?.devEui || '',
               product: prod || dev.product || prev?.product,
               imageUrl: prod?.imageUrl || dev.imageUrl || prev?.imageUrl,
-              status: finalLastSeenAt && (Date.now() - new Date(finalLastSeenAt).getTime()) / 3600000 <= 1 ? 'Online' : 'Offline',
-              lastSeenAt: finalLastSeenAt || prev!.lastSeenAt,
-              batteryVoltage,
-              soc,
-              brightnessLevel: finalBrightnessLevel,
-              lat: dev.variables?.latitude || dev.latitude || prev!.lat,
-              lng: dev.variables?.longitude || dev.longitude || prev!.lng,
-              panelVoltage,
-              panelCurrent,
-              batteryCurrent,
-              surfaceTemp,
-              controllerTemp,
-              ledCurrent,
-              ledStatus: finalLedStatus,
-              state: computedState,
-              generatedKwh: Number(currentGen.toFixed(6)),
-              energyUsedKwh: Number(currentUsed.toFixed(6))
+              status: hasEverBeenSeen ? ((Date.now() - new Date(finalLastSeenAt).getTime()) / 3600000 <= 2 ? 'Online' : 'Offline') : 'Never Seen',
+              lastSeenAt: finalLastSeenAt || prev?.lastSeenAt,
+              batteryVoltage: hasEverBeenSeen ? batteryVoltage : null,
+              soc: hasEverBeenSeen ? soc : null,
+              brightnessLevel: hasEverBeenSeen ? finalBrightnessLevel : null,
+              lat: dev.variables?.latitude || dev.latitude || prev?.lat || 0,
+              lng: dev.variables?.longitude || dev.longitude || prev?.lng || 0,
+              panelVoltage: hasEverBeenSeen ? panelVoltage : null,
+              panelCurrent: hasEverBeenSeen ? panelCurrent : null,
+              batteryCurrent: hasEverBeenSeen ? batteryCurrent : null,
+              surfaceTemp: hasEverBeenSeen ? surfaceTemp : null,
+              controllerTemp: hasEverBeenSeen ? controllerTemp : null,
+              ledCurrent: hasEverBeenSeen ? ledCurrent : null,
+              ledStatus: hasEverBeenSeen ? finalLedStatus : 'N/A',
+              state: hasEverBeenSeen ? computedState : 'N/A',
             };
           });
         }
@@ -1144,9 +1421,13 @@ const DeviceDetail: React.FC = () => {
       }
     };
     fetchDevice();
+
     if (refreshInterval === null) return;
     const interval = setInterval(fetchDevice, refreshInterval * 1000);
-    return () => clearInterval(interval);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, [devEui, refreshInterval]);
 
   // Synchronize product and imageUrl from matching device in otherDevices (loaded from application list)
@@ -1174,6 +1455,43 @@ const DeviceDetail: React.FC = () => {
     }
   }, [otherDevices, device?.devEui, device?.product, device?.imageUrl]);
 
+  // This new effect will synchronize the last point of the graph with the latest live data
+  // whenever the device state is updated by the polling mechanism.
+  useEffect(() => {
+    // Only run this logic if the current view is for "Today"
+    const isTodayView = startDateRef.current === getTodayStr() && endDateRef.current === getTodayStr();
+    
+    if (isTodayView && device && history.labels.length > 0) {
+      setHistory(h => {
+        // Defensive check
+        if (!h || h.labels.length === 0) return h;
+
+        const lastIdx = h.labels.length - 1;
+        
+        // Create copies to avoid direct mutation
+        const nextVolts = [...h.voltage];
+        const nextSoc = [...h.soc];
+        const nextBright = [...h.brightness];
+        const nextTemp = [...h.temp];
+        const nextLedCurr = [...h.ledCurrent];
+        const nextBatCurr = [...h.batteryCurrent];
+        const nextPanCurr = [...h.panelCurrent];
+
+        // Update the last point of each dataset with the latest live data
+        if (device.batteryVoltage !== undefined && device.batteryVoltage !== null) nextVolts[lastIdx] = Number(device.batteryVoltage);
+        if (device.soc !== undefined && device.soc !== null) nextSoc[lastIdx] = Number(device.soc);
+        if (device.brightnessLevel !== undefined && device.brightnessLevel !== null) nextBright[lastIdx] = Number(device.brightnessLevel);
+        if (device.controllerTemp !== undefined && device.controllerTemp !== null) nextTemp[lastIdx] = Number(device.controllerTemp);
+        if (device.ledCurrent !== undefined && device.ledCurrent !== null) nextLedCurr[lastIdx] = Number(device.ledCurrent);
+        if (device.batteryCurrent !== undefined && device.batteryCurrent !== null) nextBatCurr[lastIdx] = Number(device.batteryCurrent);
+        if (device.panelCurrent !== undefined && device.panelCurrent !== null) nextPanCurr[lastIdx] = Number(device.panelCurrent);
+
+        // Return the updated history object
+        return { ...h, voltage: nextVolts, soc: nextSoc, brightness: nextBright, temp: nextTemp, ledCurrent: nextLedCurr, batteryCurrent: nextBatCurr, panelCurrent: nextPanCurr };
+      });
+    }
+  }, [device]); // Dependency on `device` ensures this runs when live data is updated
+
   const isHistoricalRef = useRef(true);
   const [isHistorical, setIsHistorical] = useState(true);
   const [startDate, setStartDate] = useState(getTodayStr());
@@ -1183,69 +1501,9 @@ const DeviceDetail: React.FC = () => {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [cloudRecords, setCloudRecords] = useState<any[]>([]);
 
-  // Synchronize ref so the interval does not read stale state
-  useEffect(() => {
-    isHistoricalRef.current = isHistorical;
-  }, [isHistorical]);
-
-  useEffect(() => {
-    startDateRef.current = startDate;
-  }, [startDate]);
-
-  useEffect(() => {
-    endDateRef.current = endDate;
-  }, [endDate]);
-
-
-
-    const generateTelemetryForDates = (startStr: string, endStr: string, suppliedDevice?: any) => {
-    const currentDevice = suppliedDevice || deviceRef.current || device;
-    const data = createTelemetryForDevice(devEui || "0e0b894ac6e1fa28", startStr, endStr, currentDevice);
-    setHistory(data);
-    
-    const validVoltages = data.voltage.filter((v): v is number => v !== null);
-    const validTemps = data.temp.filter((t): t is number => t !== null);
-    
-    setMaxValues({
-      voltage: validVoltages.length > 0 ? Math.max(...validVoltages) : (currentDevice?.batteryVoltage || 25.8),
-      temp: validTemps.length > 0 ? Math.max(...validTemps) : (currentDevice?.controllerTemp || 26)
-    });
-
-    const chartInstance = multiAxisChartRef.current;
-    if (chartInstance) {
-      try {
-        chartInstance.data.labels = data.labels;
-        if (chartInstance.data.datasets[0]) chartInstance.data.datasets[0].data = data.temp;
-        if (chartInstance.data.datasets[1]) chartInstance.data.datasets[1].data = data.batteryCurrent;
-        if (chartInstance.data.datasets[2]) chartInstance.data.datasets[2].data = data.panelCurrent;
-        if (chartInstance.data.datasets[3]) chartInstance.data.datasets[3].data = data.ledCurrent;
-        if (chartInstance.data.datasets[4]) chartInstance.data.datasets[4].data = Array(data.labels.length).fill(80);
-        chartInstance.update();
-      } catch (err) {
-        console.warn("Direct chart update error in generateTelemetryForDates:", err);
-      }
-    }
-  };
-
-  useEffect(() => {
-    if (device && cloudRecords.length === 0) {
-      generateTelemetryForDates(startDate, endDate, device);
-    }
-  }, [
-    device?.batteryVoltage,
-    device?.soc,
-    device?.brightnessLevel,
-    device?.panelVoltage,
-    device?.panelCurrent,
-    device?.batteryCurrent,
-    device?.controllerTemp,
-    device?.ledCurrent,
-    cloudRecords.length,
-    startDate,
-    endDate
-  ]);
-
-
+  useEffect(() => { isHistoricalRef.current = isHistorical; }, [isHistorical]);
+  useEffect(() => { startDateRef.current = startDate; }, [startDate]);
+  useEffect(() => { endDateRef.current = endDate; }, [endDate]);
 
   const handleShortcutClick = (range: string) => {
     setDateRange(range);
@@ -1409,171 +1667,105 @@ const DeviceDetail: React.FC = () => {
       const startTs = startDt.toISOString();
       const endDt = new Date(`${endStr}T23:59:59`);
       const endTs = endDt.toISOString();
-
-      const response = await DeviceService.getDeviceRecords(devEui, startTs, endTs);
       
+      // Calculate a dynamic limit based on the date range to ensure all data is fetched.
+      const dayDifference = Math.max(1, Math.ceil((endDt.getTime() - startDt.getTime()) / (1000 * 60 * 60 * 24)));
+      // Assuming data points every 10 minutes (6 per hour), plus a buffer.
+      const estimatedLimit = dayDifference * 24 * 6 * 1.2; 
+      const apiLimit = Math.min(5000, Math.ceil(estimatedLimit));
+
+      const response = await DeviceService.getDeviceRecords(devEui, startTs, endTs, apiLimit);
+
       let records: any[] = [];
       if (response && response.data) {
-        if (Array.isArray(response.data.records)) {
-          records = response.data.records;
-        } else if (Array.isArray(response.data.result)) {
-          records = response.data.result;
-        } else if (Array.isArray(response.data)) {
-          records = response.data;
+        // More robust data extraction, similar to Dashboard
+        records = response.data?.records || response.data?.result || response.data?.data || response.data?.items || (Array.isArray(response.data) ? response.data : []);
+        if (!Array.isArray(records)) {
+          records = [];
         }
       }
-
+    
       if (records && records.length > 0) {
         setCloudRecords(records);
         
-        // Sort chronologically
+        let periodGeneratedKwh = 0;
+        let periodUsedKwh = 0;
+
+        const getVal = (record: any, keys: string[]) => {
+            for (const key of keys) {
+                if (record[key] !== undefined && record[key] !== null) return Number(record[key]);
+                if (record.variables?.[key] !== undefined && record.variables?.[key] !== null) return Number(record.variables[key]);
+                if (record.object?.[key] !== undefined && record.object?.[key] !== null) return Number(record.object[key]);
+            }
+            return null;
+        };
+
+        for (let i = 1; i < records.length; i++) {
+            const prev = records[i - 1];
+            const curr = records[i];
+            const prevTime = new Date(prev.time || prev.createdAt || prev.timestamp).getTime();
+            const currTime = new Date(curr.time || curr.createdAt || curr.timestamp).getTime();
+            const elapsedHours = (currTime - prevTime) / (1000 * 60 * 60);
+
+            if (elapsedHours <= 0 || elapsedHours > 48) continue;
+
+            const panelVoltage = getVal(prev, ['panelVoltage', 'panel_voltage']);
+            const panelCurrent = getVal(prev, ['panelCurrent', 'panel_current']);
+            const batteryVoltage = getVal(prev, ['batteryVoltage', 'battery_voltage']);
+            const ledCurrent = getVal(prev, ['ledCurrent', 'led_current']);
+
+            const chargingPowerW = (panelVoltage || 0) * (panelCurrent || 0);
+            const consumptionPowerW = (batteryVoltage || 0) * (ledCurrent || 0);
+
+            periodGeneratedKwh += (chargingPowerW * elapsedHours) / 1000;
+            periodUsedKwh += (consumptionPowerW * elapsedHours) / 1000;
+        }
+        setPeriodTotals({ generated: periodGeneratedKwh, used: periodUsedKwh });
+
         records.sort((a, b) => {
           const tA = new Date(a.time || a.createdAt || a.timestamp || 0).getTime();
           const tB = new Date(b.time || b.createdAt || b.timestamp || 0).getTime();
           return tA - tB;
         });
 
-        // Helper to retrieve value safely from record, variables object, or nested decoded object
-        const getRecordVal = (record: any, keys: string[]) => {
-          for (const key of keys) {
-            if (record[key] !== undefined && record[key] !== null) return record[key];
-            if (record.variables?.[key] !== undefined && record.variables?.[key] !== null) return record.variables[key];
-            if (record.object?.[key] !== undefined && record.object?.[key] !== null) return record.object[key];
-          }
-          return null;
-        };
+        const baseTelemetry = createTelemetryForDevice(devEui || "0e0b894ac6e1fa28", startStr, endStr, deviceRef.current, records);
 
-                const baseTelemetry = createTelemetryForDevice(devEui || "0e0b894ac6e1fa28", startStr, endStr, currentDevice);
-
-        const nextLabels = [...baseTelemetry.labels];
-        const nextTemp = [...baseTelemetry.temp];
-        const nextBatCurr = [...baseTelemetry.batteryCurrent];
-        const nextPanCurr = [...baseTelemetry.panelCurrent];
-        const nextLedCurr = [...baseTelemetry.ledCurrent];
-        const nextVolts = [...baseTelemetry.voltage];
-        const nextSoc = [...baseTelemetry.soc];
-        const nextBright = [...baseTelemetry.brightness];
-
-        // Safely extract parameter fields and overlay on top of the matching 40-minute interval indices
-        records.forEach(r => {
-          const dt = new Date(r.time || r.createdAt || r.timestamp);
-          if (isNaN(dt.getTime())) return;
-          
-          const hours = dt.getHours();
-          const minutes = dt.getMinutes();
-          // Find closest of the 96 slots (each slot is 15 mins)
-          const minutesVal = hours * 60 + minutes;
-          const nearest15Mins = Math.round(minutesVal / 15) * 15;
-          const slotIdx = Math.min(95, Math.max(0, Math.floor(nearest15Mins / 15)));
-          if (slotIdx >= nextLabels.length) return; // Keep overlay within the bounds of today's current time range
-          
-          const v = getRecordVal(r, ['batteryVoltage', 'battery_voltage', 'voltage', 'battery_voltage_v']);
-          if (v !== null && v !== undefined) nextVolts[slotIdx] = Number(v);
-
-          const s = getRecordVal(r, ['soc', 'batterySoc', 'battery_soc', 'batteryLevel', 'battery_level', 'level']);
-          if (s !== null && s !== undefined) nextSoc[slotIdx] = Number(s);
-
-          const b = getRecordVal(r, ['brightnessLevel', 'brightness_level', 'brightness', 'brightnessPercent', 'brightness_percent']);
-          if (b !== null && b !== undefined) nextBright[slotIdx] = Number(b);
-
-          const t = getRecordVal(r, ['controllerTemperature', 'controllerTemp', 'temperature', 'controller_temperature', 'controller_temp', 'temp', 'temperatureC', 'temperature_c']);
-          if (t !== null && t !== undefined) nextTemp[slotIdx] = Number(t);
-
-          const lc = getRecordVal(r, ['ledCurrent', 'led_current', 'ledCurrentA', 'led_current_a', 'led_current_amp']);
-          if (lc !== null && lc !== undefined) nextLedCurr[slotIdx] = Number(lc);
-
-          const bc = getRecordVal(r, ['batteryCurrent', 'battery_current', 'batteryCurrentA', 'battery_current_a', 'battery_current_amp']);
-          if (bc !== null && bc !== undefined) nextBatCurr[slotIdx] = Number(bc);
-
-          const pc = getRecordVal(r, ['panelCurrent', 'panel_current', 'panelCurrentA', 'panel_current_a', 'panel_current_amp']);
-          if (pc !== null && pc !== undefined) nextPanCurr[slotIdx] = Number(pc);
-        });
-
-        // Ensure the last-seen / current live values are seamlessly appended/updated to the latest active past index in the list!
-        // This makes sure the line graph ends precisely at the latest updated status
-        let lastNonNullIdx = -1;
-        for (let i = nextLabels.length - 1; i >= 0; i--) {
-          if (baseTelemetry.labels[i] && i < nextVolts.length) {
-            if (nextVolts[i] !== null || nextSoc[i] !== null || nextTemp[i] !== null) {
-              lastNonNullIdx = i;
-              break;
-            }
-          }
-        }
-
-        // If we found the latest active past/present point of today, bind it to current live device metrics
-        if (lastNonNullIdx !== -1 && currentDevice) {
-          if (currentDevice.batteryVoltage !== undefined && currentDevice.batteryVoltage !== null) {
-            nextVolts[lastNonNullIdx] = Number(currentDevice.batteryVoltage);
-          }
-          if (currentDevice.soc !== undefined && currentDevice.soc !== null) {
-            nextSoc[lastNonNullIdx] = Number(currentDevice.soc);
-          }
-          if (currentDevice.brightnessLevel !== undefined && currentDevice.brightnessLevel !== null) {
-            nextBright[lastNonNullIdx] = Number(currentDevice.brightnessLevel);
-          }
-          if (currentDevice.controllerTemp !== undefined && currentDevice.controllerTemp !== null) {
-            nextTemp[lastNonNullIdx] = Number(currentDevice.controllerTemp);
-          }
-          if (currentDevice.ledCurrent !== undefined && currentDevice.ledCurrent !== null) {
-            nextLedCurr[lastNonNullIdx] = Number(currentDevice.ledCurrent);
-          }
-          if (currentDevice.batteryCurrent !== undefined && currentDevice.batteryCurrent !== null) {
-            nextBatCurr[lastNonNullIdx] = Number(currentDevice.batteryCurrent);
-          }
-          if (currentDevice.panelCurrent !== undefined && currentDevice.panelCurrent !== null) {
-            nextPanCurr[lastNonNullIdx] = Number(currentDevice.panelCurrent);
-          }
-        }
-
-        // Set state
+        // The createTelemetryForDevice function now handles all data processing, including real and simulated data.
+        // We can set the history directly from its result.
         setHistory(baseTelemetry);
-
-
-        const validVoltages = nextVolts.filter((v): v is number => v !== null);
-        const validTemps = nextTemp.filter((t): t is number => t !== null);
+  
+        const validVoltages = baseTelemetry.voltage.filter((v): v is number => v !== null);
+        const validTemps = baseTelemetry.temp.filter((t): t is number => t !== null);
         
         setMaxValues({
-          voltage: validVoltages.length > 0 ? Math.max(...validVoltages) : (currentDevice?.batteryVoltage || 25.8),
-          temp: validTemps.length > 0 ? Math.max(...validTemps) : (currentDevice?.controllerTemp || 26)
+          voltage: validVoltages.length > 0 ? Math.max(...validVoltages) : (device?.batteryVoltage || 25.8),
+          temp: validTemps.length > 0 ? Math.max(...validTemps) : (device?.controllerTemp || 26)
         });
-
-        const chartInstance = multiAxisChartRef.current;
-        if (chartInstance) {
-          try {
-            chartInstance.data.labels = nextLabels;
-            if (chartInstance.data.datasets[0]) chartInstance.data.datasets[0].data = nextTemp;
-            if (chartInstance.data.datasets[1]) chartInstance.data.datasets[1].data = nextBatCurr;
-            if (chartInstance.data.datasets[2]) chartInstance.data.datasets[2].data = nextPanCurr;
-            if (chartInstance.data.datasets[3]) chartInstance.data.datasets[3].data = nextLedCurr;
-            if (chartInstance.data.datasets[4]) chartInstance.data.datasets[4].data = Array(nextLabels.length).fill(80);
-            chartInstance.update();
-          } catch (err) {
-            console.warn("Direct chart update error:", err);
-          }
-        }
       } else {
         setCloudRecords([]);
-        generateTelemetryForDates(startStr, endStr);
+        setPeriodTotals(null);
+        setHistory(createTelemetryForDevice(devEui || "0e0b894ac6e1fa28", startStr, endStr, deviceRef.current, []));
       }
     } catch (err) {
       console.warn("Could not handle cloud records refresh automatically:", err);
-      // Failover elegantly so charts are never empty
       setCloudRecords([]);
-      generateTelemetryForDates(startStr, endStr);
+      setPeriodTotals(null);
+      setHistory(createTelemetryForDevice(devEui || "0e0b894ac6e1fa28", startStr, endStr, deviceRef.current, []));
     }
   };
 
   useEffect(() => {
     if (!devEui) return;
     fetchCloudRecords();
-
-    const intervalId = setInterval(() => {
-      fetchCloudRecords();
-    }, 30000); // 30 seconds
-
-    return () => clearInterval(intervalId);
-  }, [devEui, startDate, endDate]);
+    
+    // Only set up polling interval for live view, not for historical views
+    if (!isHistoricalRef.current) {
+      const intervalId = setInterval(() => {
+        fetchCloudRecords();
+      }, 30000); // 30 seconds
+      return () => clearInterval(intervalId);
+    }
+  }, [devEui, startDate, endDate, isHistorical]);
 
   const getActivePeriodLabel = () => {
     if (startDate === endDate) {
@@ -2023,10 +2215,16 @@ const DeviceDetail: React.FC = () => {
         return validTemps[validTemps.length - 1];
       }
     }
-    return device?.controllerTemp ?? 26;
+    return device?.controllerTemp ?? null;
   };
 
-  if (!device) return <div>Loading...</div>;
+  if (!device) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="w-12 h-12 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-[1780px] mx-auto pb-10">
@@ -2129,40 +2327,48 @@ const DeviceDetail: React.FC = () => {
                 <p className={cn(
                   "text-sm font-bold",
                   device.state === 'Charging' ? "text-green-600 dark:text-green-400" :
-                  device.state === 'Discharger' ? "text-amber-500 dark:text-amber-400" :
+                  device.state === 'Discharging' ? "text-amber-500 dark:text-amber-400" :
                   "text-slate-700 dark:text-slate-300"
                 )}>{device.state}</p>
               </div>
               <div>
                 <p className="text-xs text-slate-500 mb-1">Battery Voltage</p>
-                <p className="text-sm font-bold text-slate-900 dark:text-white">{device.batteryVoltage} V</p>
+                <p className="text-sm font-bold text-slate-900 dark:text-white">{device.batteryVoltage !== null ? `${device.batteryVoltage.toFixed(1)} V` : 'N/A'}</p>
               </div>
               <div>
                 <p className="text-xs text-slate-500 mb-1">State of Charge</p>
-                <p className="text-sm font-bold text-slate-900 dark:text-white">{device.soc} %</p>
+                <p className="text-sm font-bold text-slate-900 dark:text-white">{device.soc !== null ? `${device.soc} %` : 'N/A'}</p>
               </div>
               <div>
                 <p className="text-xs text-slate-500 mb-1">Generated</p>
-                <p className="text-sm font-bold text-slate-900 dark:text-white">
-                  {typeof device.generatedKwh === 'number' ? device.generatedKwh.toFixed(3) : device.generatedKwh} kWh
-                </p>
+                {loadingAccumulated ? (
+                  <p className="text-sm font-bold text-slate-400 animate-pulse">Loading...</p>
+                ) : (
+                  <p className="text-sm font-bold text-slate-900 dark:text-white">
+                    {accumulatedEnergy ? `${accumulatedEnergy.generated.toFixed(3)} kWh` : 'N/A'}
+                  </p>
+                )}
               </div>
               <div>
                 <p className="text-xs text-slate-500 mb-1">Energy Used</p>
-                <p className="text-sm font-bold text-slate-900 dark:text-white">
-                  {typeof device.energyUsedKwh === 'number' ? device.energyUsedKwh.toFixed(3) : device.energyUsedKwh} kWh
-                </p>
+                {loadingAccumulated ? (
+                  <p className="text-sm font-bold text-slate-400 animate-pulse">Loading...</p>
+                ) : (
+                  <p className="text-sm font-bold text-slate-900 dark:text-white">
+                    {accumulatedEnergy ? `${accumulatedEnergy.used.toFixed(3)} kWh` : 'N/A'}
+                  </p>
+                )}
               </div>
               <div>
                 <p className="text-xs text-slate-500 mb-1">LED Status</p>
                 <p className={cn(
                   "text-sm font-bold",
-                  device.ledStatus === 'ON' ? "text-emerald-500 dark:text-emerald-400" : "text-red-500 dark:text-red-400"
+                  device.ledStatus === 'ON' ? "text-emerald-500 dark:text-emerald-400" : (device.ledStatus === 'OFF' ? "text-red-500 dark:text-red-400" : "text-slate-500 dark:text-slate-400")
                 )}>{device.ledStatus}</p>
               </div>
               <div>
                 <p className="text-xs text-slate-500 mb-1">Brightness Level</p>
-                <p className="text-sm font-bold text-slate-900 dark:text-white">{device.brightnessLevel} %</p>
+                <p className="text-sm font-bold text-slate-900 dark:text-white">{device.brightnessLevel !== null ? `${device.brightnessLevel} %` : 'N/A'}</p>
               </div>
             </div>
 
@@ -2312,11 +2518,6 @@ const DeviceDetail: React.FC = () => {
               </button>
             ))}
           </div>
-
-          <div className="text-xs bg-indigo-50 dark:bg-indigo-950/30 text-indigo-600 dark:text-indigo-400 font-bold px-3 py-1.5 rounded-xl border border-indigo-100/50 dark:border-indigo-950/50 flex items-center space-x-1.5">
-            <Clock className="w-3.5 h-3.5 text-indigo-500 animate-pulse" />
-            <span>ช่วงเวลาที่เรียกดู: {getActivePeriodLabel()}</span>
-          </div>
         </div>
         
         <div className="flex flex-wrap items-center gap-4">
@@ -2377,8 +2578,10 @@ const DeviceDetail: React.FC = () => {
           <div className="flex justify-between items-start mb-2">
             <div>
               <h3 className="text-sm font-bold text-slate-700 dark:text-slate-300">Battery Voltage</h3>
-              <div className="flex items-baseline space-x-2 mt-1">
-                <p className="text-3xl font-extrabold text-slate-900 dark:text-white">{device.batteryVoltage.toFixed(1)}<span className="text-sm font-normal text-slate-500 ml-1">V</span></p>
+              <div className="flex items-baseline space-x-2 mt-1 h-[36px]">
+                <p className="text-3xl font-extrabold text-slate-900 dark:text-white">
+                  {device.batteryVoltage !== null ? device.batteryVoltage.toFixed(1) : 'N/A'}{device.batteryVoltage !== null && <span className="text-sm font-normal text-slate-500 ml-1">V</span>}
+                </p>
               </div>
             </div>
             <div className="w-8 h-8 rounded-full bg-orange-100 dark:bg-orange-950/40 text-orange-500 flex items-center justify-center shadow-sm">
@@ -2408,8 +2611,10 @@ const DeviceDetail: React.FC = () => {
           <div className="flex justify-between items-start mb-2">
             <div>
               <h3 className="text-sm font-bold text-slate-700 dark:text-slate-300">State of Charge (SOC)</h3>
-              <div className="flex items-baseline space-x-2 mt-1">
-                <p className="text-3xl font-extrabold text-slate-900 dark:text-white">{device.soc}<span className="text-sm font-normal text-slate-500 ml-1">%</span></p>
+              <div className="flex items-baseline space-x-2 mt-1 h-[36px]">
+                <p className="text-3xl font-extrabold text-slate-900 dark:text-white">
+                  {device.soc !== null ? device.soc : 'N/A'}{device.soc !== null && <span className="text-sm font-normal text-slate-500 ml-1">%</span>}
+                </p>
               </div>
             </div>
             <div className="w-8 h-8 rounded-full bg-orange-100 dark:bg-orange-950/40 text-orange-500 flex items-center justify-center shadow-sm">
@@ -2435,8 +2640,10 @@ const DeviceDetail: React.FC = () => {
           <div className="flex justify-between items-start mb-2">
             <div>
               <h3 className="text-sm font-bold text-slate-700 dark:text-slate-300">Brightness Level</h3>
-              <div className="flex items-baseline space-x-2 mt-1">
-                <p className="text-3xl font-extrabold text-slate-900 dark:text-white">{device.brightnessLevel}<span className="text-sm font-normal text-slate-500 ml-1">%</span></p>
+              <div className="flex items-baseline space-x-2 mt-1 h-[36px]">
+                <p className="text-3xl font-extrabold text-slate-900 dark:text-white">
+                  {device.brightnessLevel !== null ? device.brightnessLevel : 'N/A'}{device.brightnessLevel !== null && <span className="text-sm font-normal text-slate-500 ml-1">%</span>}
+                </p>
               </div>
             </div>
             <div className="w-8 h-8 rounded-full bg-orange-100 dark:bg-orange-950/40 text-orange-500 flex items-center justify-center shadow-sm">
@@ -2454,12 +2661,15 @@ const DeviceDetail: React.FC = () => {
           </div>
         </div>
 
-        <div className="bg-white dark:bg-slate-900 rounded-[2rem] border border-slate-200 dark:border-slate-800 p-6 flex flex-col h-[380px] shadow-sm hover:shadow-md transition-shadow lg:col-span-2">
+        <div className="bg-white dark:bg-slate-900 rounded-[2rem] border border-slate-200 dark:border-slate-800 p-6 flex flex-col h-[380px] shadow-sm hover:shadow-md transition-shadow">
           <div className="flex justify-between items-start mb-2 border-b border-slate-100 dark:border-slate-800 pb-3">
             <div>
               <h3 className="text-sm font-bold text-slate-700 dark:text-slate-300">Controller Temp & Currents</h3>
-              <div className="flex items-baseline space-x-2 mt-1">
-                <p className="text-3xl font-extrabold text-slate-900 dark:text-white">{getLatestGraphTemp()}<span className="text-sm font-normal text-slate-500 ml-1">°C</span></p>
+              <div className="flex items-baseline space-x-2 mt-1 h-[36px]">
+                <p className="text-3xl font-extrabold text-slate-900 dark:text-white">
+                  {getLatestGraphTemp() !== null ? getLatestGraphTemp() : 'N/A'}
+                  {getLatestGraphTemp() !== null && <span className="text-sm font-normal text-slate-500 ml-1">°C</span>}
+                </p>
               </div>
             </div>
             <div className="w-8 h-8 rounded-full bg-orange-100 dark:bg-orange-950/40 text-orange-500 flex items-center justify-center shadow-sm">

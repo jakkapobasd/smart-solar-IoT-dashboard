@@ -177,7 +177,7 @@ const DiagnosticTest: React.FC = () => {
   // Pre-test preview triggers
   const handleOpenPreview = () => {
     if (!selectedGroup) {
-      showToast('error', 'กรุณาเลือกกลุ่มที่จะทดสอบก่อน');
+      showToast('error', 'กรุณาเลือกกลุ่มที่จะทดสอบก่อน' );
       return;
     }
     setIsPreviewOpen(true);
@@ -187,17 +187,13 @@ const DiagnosticTest: React.FC = () => {
   const handleStartTest = async () => {
     if (!selectedGroup) return;
     setIsPreviewOpen(false);
-    setIsTestRunning(true);
     setCommandPending(true);
     setLogs([]);
 
     const durationMins = getTestDurationMinutes();
     const durationSecs = durationMins * 60;
-    setOriginalDuration(durationSecs);
-    setTimeLeft(durationSecs);
-    setTestProgress(100);
-
     const level = testType === 'on' ? 100 : 0;
+
     addLog(`🔄 Initiation requested: Group [${selectedGroup.name}]`, 'info');
     addLog(`⏱️ Configured parameters: Mode=${testType.toUpperCase()} (Brightness ${level}%), Duration=${durationSecs} วินาที (${durationMins} นาที)`, 'info');
     addLog(`📡 Target fleet size: ${devices.length} LoRaWAN endpoints`, 'info');
@@ -205,7 +201,6 @@ const DiagnosticTest: React.FC = () => {
     const currentRunId = Date.now();
     requestRunIdRef.current = currentRunId;
 
-    // Sort devices alphabetically and numerically by name/pole number
     const sortedDevices = [...devices].sort((a, b) => {
       const nameA = a.name || a.devEui || '';
       const nameB = b.name || b.devEui || '';
@@ -213,101 +208,55 @@ const DiagnosticTest: React.FC = () => {
     });
 
     try {
-      if (testType === 'on') {
-        addLog(`⚡ เริ่มส่งสัญญาณเปิดไฟแบบหน่วงเวลาทีละ 1 วินาที เรียงตามเสา/ชื่อ...`, 'info');
-        
-        // Save diagnostic test in localStorage
-        const activeTest = {
-          groupId: selectedGroup.id,
-          groupName: selectedGroup.name,
-          startTime: Date.now(),
-          duration: durationSecs,
-          type: testType,
-          level: level,
-          deviceEuis: sortedDevices.map(d => d.devEui)
-        };
-        localStorage.setItem('activeDiagnosticTest', JSON.stringify(activeTest));
+      addLog(`⚡ Sending ${testType.toUpperCase()} signal to group [${selectedGroup.name}]...`, 'info');
+      
+      await DeviceService.setGroupBrightness(selectedGroup.id, {
+        brightnessLevel: level,
+        duration: durationSecs
+      });
 
-        // Also record the test history for telemetry graphing purposes
-        recordTestStart(
-          sortedDevices.map(d => d.devEui),
-          level,
-          durationSecs,
-          `Diagnostic Group: ${selectedGroup.name}`,
-          testType
-        );
-
-        // Turn ON using Multicast Group API
-        addLog(`⚡ ส่งสัญญาณเปิดไฟ (Bulk) ไปยังกลุ่ม [${selectedGroup.name}]...`, 'info');
-        
-        try {
-          await DeviceService.setGroupBrightness(selectedGroup.id, {
-            brightnessLevel: level,
-            duration: durationSecs
-          });
-          if (requestRunIdRef.current === currentRunId) {
-            addLog(`✅ สั่งเปิดไฟ 100% กลุ่ม [${selectedGroup.name}] สำเร็จ`, 'success');
-            addLog(`⚡ สั่งเปิดไฟเสร็จสิ้น`, 'success');
-          }
-        } catch (err: any) {
-          if (requestRunIdRef.current === currentRunId) {
-            const errMsg = err.response?.data?.detail || err.response?.data?.message || err.message || 'Error occurred';
-            addLog(`❌ ส่งสัญญาณเกิดข้อผิดพลาด: ${errMsg}`, 'error');
-          }
-        }
-      } else {
-        // testType === 'off' -> Turn OFF using Multicast Group API
-        addLog(`⚡ ส่งสัญญาณปิดไฟ (Bulk) ไปยังกลุ่ม [${selectedGroup.name}]...`, 'info');
-        
-        try {
-          await DeviceService.setGroupBrightness(selectedGroup.id, {
-            brightnessLevel: level,
-            duration: durationSecs
-          });
-          if (requestRunIdRef.current === currentRunId) {
-            addLog(`✅ สั่งปิดไฟ 0% กลุ่ม [${selectedGroup.name}] สำเร็จ`, 'success');
-          }
-        } catch (err: any) {
-          if (requestRunIdRef.current === currentRunId) {
-            const errMsg = err.response?.data?.detail || err.response?.data?.message || err.message || 'Error occurred';
-            addLog(`❌ ส่งสัญญาณเกิดข้อผิดพลาด: ${errMsg}`, 'error');
-          }
-        }
-        
-        if (requestRunIdRef.current === currentRunId) {
-          // Save diagnostic test in localStorage
-          const activeTest = {
-            groupId: selectedGroup.id,
-            groupName: selectedGroup.name,
-            startTime: Date.now(),
-            duration: durationSecs,
-            type: testType,
-            level: level,
-            deviceEuis: sortedDevices.map(d => d.devEui)
-          };
-          localStorage.setItem('activeDiagnosticTest', JSON.stringify(activeTest));
-
-          // Also record the test history for telemetry graphing purposes
-          recordTestStart(
-            sortedDevices.map(d => d.devEui),
-            level,
-            durationSecs,
-            `Diagnostic Group: ${selectedGroup.name}`,
-            testType
-          );
-
-          addLog(`⚡ สั่งปิดไฟเสร็จสิ้นครบทุกโคมแล้ว`, 'success');
-        }
+      if (requestRunIdRef.current !== currentRunId) {
+        addLog('⏹️ Test was cancelled during transmission.', 'warn');
+        return;
       }
 
-      if (requestRunIdRef.current === currentRunId) {
-        showToast('success', 'เริ่มทำการทดสอบระบบเรียบร้อยเเล้ว');
-      }
+      // If API call is successful, then start the test UI and record it
+      setIsTestRunning(true);
+      setOriginalDuration(durationSecs);
+      setTimeLeft(durationSecs);
+      setTestProgress(100);
+
+      const activeTest = {
+        groupId: selectedGroup.id,
+        groupName: selectedGroup.name,
+        startTime: Date.now(),
+        duration: durationSecs,
+        type: testType,
+        level: level,
+        deviceEuis: sortedDevices.map(d => d.devEui)
+      };
+      localStorage.setItem('activeDiagnosticTest', JSON.stringify(activeTest));
+
+      recordTestStart(
+        sortedDevices.map(d => d.devEui),
+        level,
+        durationSecs,
+        `Diagnostic Group: ${selectedGroup.name}`,
+        testType
+      );
+
+      addLog(`✅ Successfully sent ${testType.toUpperCase()} command to group.`, 'success');
+      addLog(`⚡ Test is now running.`, 'success');
+      showToast('success', 'เริ่มทำการทดสอบระบบเรียบร้อยเเล้ว');
+
     } catch (err: any) {
       if (requestRunIdRef.current === currentRunId) {
         const errMsg = err.response?.data?.detail || err.response?.data?.message || err.message || 'Unknown network error';
         addLog(`❌ Failed to transmit broadcast payload: ${errMsg}`, 'error');
         showToast('error', `Failed to start test: ${errMsg}`);
+        // Ensure test state is not running if it failed to start
+        setIsTestRunning(false);
+        setTimeLeft(0);
       }
     } finally {
       if (requestRunIdRef.current === currentRunId) {
@@ -385,24 +334,18 @@ const DiagnosticTest: React.FC = () => {
   const handleQuickSwitch = async (newType: 'on' | 'off') => {
     if (!selectedGroup) return;
     
-    // Stop any currently running sequentials instantly
     const currentRunId = Date.now();
     requestRunIdRef.current = currentRunId;
     
     setCommandPending(true);
-    setTestType(newType);
     
     const durationMins = getTestDurationMinutes();
     const durationSecs = durationMins * 60;
-    setOriginalDuration(durationSecs);
-    setTimeLeft(durationSecs);
-    setTestProgress(100);
-    
     const level = newType === 'on' ? 100 : 0;
+
     addLog(`🔄 [Quick Change] สลับสถานะการทดสอบเป็น [${newType === 'on' ? 'เปิดไฟ 100%' : 'ปิดไฟ 0%'}] ทันที (เริ่มจับเวลาใหม่ ${durationMins} นาที)`, 'warn');
     addLog(`📡 Target fleet size: ${devices.length} LoRaWAN endpoints`, 'info');
 
-    // Sort devices alphabetically and numerically
     const sortedDevices = [...devices].sort((a, b) => {
       const nameA = a.name || a.devEui || '';
       const nameB = b.name || b.devEui || '';
@@ -410,72 +353,52 @@ const DiagnosticTest: React.FC = () => {
     });
 
     try {
-      if (newType === 'on') {
-        // TURN ON using Multicast Group API
-        addLog(`⚡ กำลังส่งสัญญาณควบคุมด่วน (Bulk) สว่าง 100% กลุ่ม [${selectedGroup.name}]...`, 'info');
-        try {
-          await DeviceService.setGroupBrightness(selectedGroup.id, {
-            brightnessLevel: 100,
-            duration: durationSecs
-          });
-          if (requestRunIdRef.current === currentRunId) {
-            addLog(`✅ สั่งเปิดไฟด่วน 100% กลุ่ม [${selectedGroup.name}] สำเร็จ`, 'success');
-          }
-        } catch (err: any) {
-          if (requestRunIdRef.current === currentRunId) {
-            const errMsg = err.response?.data?.detail || err.response?.data?.message || err.message || 'Error';
-            addLog(`❌ ส่งสัญญาณด่วนเกิดข้อผิดพลาด: ${errMsg}`, 'error');
-          }
-        }
-      } else {
-        // TURN OFF using Multicast Group API
-        addLog(`⚡ กำลังส่งสัญญาณควบคุมด่วน (Bulk) ปิดไฟ 0% กลุ่ม [${selectedGroup.name}]...`, 'info');
-        try {
-          await DeviceService.setGroupBrightness(selectedGroup.id, {
-            brightnessLevel: 0,
-            duration: durationSecs
-          });
-          if (requestRunIdRef.current === currentRunId) {
-            addLog(`✅ สั่งปิดไฟด่วน 0% กลุ่ม [${selectedGroup.name}] สำเร็จ`, 'success');
-          }
-        } catch (err: any) {
-          if (requestRunIdRef.current === currentRunId) {
-            const errMsg = err.response?.data?.detail || err.response?.data?.message || err.message || 'Error';
-            addLog(`❌ ส่งสัญญาณด่วนเกิดข้อผิดพลาด: ${errMsg}`, 'error');
-          }
-        }
+      addLog(`⚡ Sending quick-switch ${newType.toUpperCase()} signal to group [${selectedGroup.name}]...`, 'info');
+      
+      await DeviceService.setGroupBrightness(selectedGroup.id, {
+        brightnessLevel: level,
+        duration: durationSecs
+      });
+
+      if (requestRunIdRef.current !== currentRunId) {
+        addLog('⏹️ Quick-switch was cancelled by another action.', 'warn');
+        return;
       }
 
-      if (requestRunIdRef.current === currentRunId) {
-        // Update localStorage
-        const activeTest = {
-          groupId: selectedGroup.id,
-          groupName: selectedGroup.name,
-          startTime: Date.now(),
-          duration: durationSecs,
-          type: newType,
-          level: level,
-          deviceEuis: sortedDevices.map(d => d.devEui)
-        };
-        localStorage.setItem('activeDiagnosticTest', JSON.stringify(activeTest));
+      // On success, update all state
+      setTestType(newType);
+      setOriginalDuration(durationSecs);
+      setTimeLeft(durationSecs);
+      setTestProgress(100);
 
-        // Re-record
-        recordTestStart(
-          sortedDevices.map(d => d.devEui),
-          level,
-          durationSecs,
-          `Diagnostic Group: ${selectedGroup.name}`,
-          newType
-        );
+      const activeTest = {
+        groupId: selectedGroup.id,
+        groupName: selectedGroup.name,
+        startTime: Date.now(),
+        duration: durationSecs,
+        type: newType,
+        level: level,
+        deviceEuis: sortedDevices.map(d => d.devEui)
+      };
+      localStorage.setItem('activeDiagnosticTest', JSON.stringify(activeTest));
 
-        addLog(`⚡ สั่งปรับระดับความสว่างต่อเนื่องครบถ้วนทุกดวงเสร็จสิ้น`, 'success');
-        showToast('success', `สลับเป็นสถานะ ${newType === 'on' ? 'เปิดไฟ 100%' : 'ปิดไฟ 0%'} เรียบร้อยแล้ว`);
-      }
+      recordTestStart(
+        sortedDevices.map(d => d.devEui),
+        level,
+        durationSecs,
+        `Diagnostic Group: ${selectedGroup.name}`,
+        newType
+      );
+
+      addLog(`✅ Successfully sent quick-switch command.`, 'success');
+      showToast('success', `สลับเป็นสถานะ ${newType === 'on' ? 'เปิดไฟ 100%' : 'ปิดไฟ 0%'} เรียบร้อยแล้ว`);
+
     } catch (err: any) {
       if (requestRunIdRef.current === currentRunId) {
         const errMsg = err.response?.data?.detail || err.response?.data?.message || err.message || 'Error';
         addLog(`❌ เกิดข้อผิดพลาด: ${errMsg}`, 'error');
         showToast('error', `เปลี่ยนโหมดล้มเหลว: ${errMsg}`);
+        // Here we don't stop the test, we just log the failure to switch. The old test continues.
       }
     } finally {
       if (requestRunIdRef.current === currentRunId) {

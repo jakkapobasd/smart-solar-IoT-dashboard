@@ -50,8 +50,8 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
         </div>
         {isOpen && (
           <div className="overflow-hidden">
-            <h1 className="font-extrabold text-sm text-slate-900 dark:text-white leading-tight truncate">LEKISE IoT</h1>
-            <p className="text-[9px] text-slate-500 font-bold tracking-wider uppercase truncate">Smart Control</p>
+            <h1 className="font-extrabold text-sm text-slate-900 dark:text-white leading-tight truncate">LEKISE APP</h1>
+            <p className="text-[9px] text-slate-500 font-bold tracking-wider uppercase truncate">Control Panel</p>
           </div>
         )}
       </div>

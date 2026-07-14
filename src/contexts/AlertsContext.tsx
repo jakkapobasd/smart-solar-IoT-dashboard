@@ -48,7 +48,7 @@ export const AlertsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const isNightByHour = currentHour >= 18 || currentHour < 6;
 
       deviceList.forEach((dev: any) => {
-        const isOnline = dev.lastSeenAt && (Date.now() - new Date(dev.lastSeenAt).getTime()) / 3600000 <= 1;
+        const isOnline = dev.lastSeenAt && (Date.now() - new Date(dev.lastSeenAt).getTime()) / 3600000 <= 2;
         const name = dev.name || 'Unknown Device';
         const eui = dev.devEui;
         const variables = dev.variables || {};

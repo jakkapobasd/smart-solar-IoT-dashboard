@@ -1,103 +1,85 @@
-export interface TestHistoryEntry {
-  id: string;
+const ACTIVE_TEST_KEY = 'activeDiagnosticTest';
+const HISTORY_KEY = 'diagnosticTestHistory';
+const MAX_HISTORY_ITEMS = 200; // Keep a reasonable number of historical tests
+
+interface TestRecord {
+  id: number; // Use timestamp as a unique ID
   deviceEuis: string[];
-  startTime: number;
-  endTime: number;
   level: number;
-  label: string;
-  type?: 'on' | 'off';
+  duration: number; // in seconds
+  description: string;
+  type: 'on' | 'off';
+  startTime: number;
 }
 
-export const getSavedTests = (): TestHistoryEntry[] => {
+// Helper to get and parse history
+const getHistory = (): TestRecord[] => {
+  const stored = localStorage.getItem(HISTORY_KEY);
+  if (!stored) return [];
   try {
-    const stored = localStorage.getItem('solar_brightness_test_history');
-    return stored ? JSON.parse(stored) : [];
+    const history = JSON.parse(stored);
+    return Array.isArray(history) ? history : [];
   } catch (e) {
-    console.error("Failed to read solar_brightness_test_history", e);
+    console.error("Failed to parse diagnostic test history", e);
     return [];
   }
 };
 
-export const saveTests = (tests: TestHistoryEntry[]) => {
-  try {
-    localStorage.setItem('solar_brightness_test_history', JSON.stringify(tests));
-  } catch (e) {
-    console.error("Failed to save solar_brightness_test_history", e);
+// Helper to save history
+const saveHistory = (history: TestRecord[]) => {
+  // Prune old entries if history is too long
+  if (history.length > MAX_HISTORY_ITEMS) {
+    history.sort((a, b) => b.startTime - a.startTime); // Sort descending by time
+    history.splice(MAX_HISTORY_ITEMS); // Keep the newest items
   }
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
 };
 
-export const recordTestStart = (
-  deviceEuis: string[],
-  level: number,
-  durationSeconds: number,
-  label: string = 'Manual Override',
-  type?: 'on' | 'off'
-) => {
-  const tests = getSavedTests();
-  const startTime = Date.now();
-  // Safe bounds: if duration is 0 or manual, default to 1 hour (3600 seconds) which can be stopped early
-  const durationMs = (durationSeconds > 0 ? durationSeconds : 3600) * 1000;
-  const endTime = startTime + durationMs;
-
-  const newEntry: TestHistoryEntry = {
-    id: `test-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+export const recordTestStart = (deviceEuis: string[], level: number, duration: number, description: string, type: 'on' | 'off') => {
+  const now = Date.now();
+  const testData: TestRecord = {
+    id: now,
     deviceEuis,
-    startTime,
-    endTime,
     level,
-    label,
-    type
+    duration,
+    description,
+    type,
+    startTime: now,
   };
 
-  tests.push(newEntry);
-  saveTests(tests);
-  return newEntry;
+  // 1. Set the active test for live UI components (maintains original behavior)
+  localStorage.setItem(ACTIVE_TEST_KEY, JSON.stringify(testData));
+
+  // 2. Add to the persistent history for graphing
+  const history = getHistory();
+  // Avoid duplicates if called in quick succession
+  if (!history.find(r => r.id === testData.id)) {
+    history.push(testData);
+    saveHistory(history);
+  }
 };
 
 export const recordTestStop = (deviceEuis: string[]) => {
-  const tests = getSavedTests();
-  const now = Date.now();
-  let updated = false;
-
-  const newTests = tests.map(t => {
-    // Check if there is any overlap in device EUIs and the test is still theoretically active or recently generated
-    const hasOverlap = t.deviceEuis.some(eui => deviceEuis.includes(eui));
-    if (hasOverlap && t.endTime > now && t.startTime <= now) {
-      updated = true;
-      return {
-        ...t,
-        endTime: now // Cap the test at current time
-      };
-    }
-    return t;
-  });
-
-  if (updated) {
-    saveTests(newTests);
-  }
+  // This function's only job is to clear the LIVE test indicator for the UI.
+  // It does NOT remove the entry from the persistent history, fulfilling the user's request.
+  localStorage.removeItem(ACTIVE_TEST_KEY);
 };
 
-export const getOverriddenBrightnessForSlot = (
-  devEui: string,
-  slotStartTime: number,
-  slotEndTime: number
-): number | null => {
-  const tests = getSavedTests();
+export const getOverriddenBrightnessForSlot = (devEui: string, slotStart: number, slotEnd: number): number | null => {
+  const history = getHistory();
+  if (history.length === 0) return null;
 
-  // Filter overlapping entries
-  const overlapping = tests.filter(t => {
-    const isTargetDevice = t.deviceEuis.includes(devEui) || t.deviceEuis.includes('all');
-    if (!isTargetDevice) return false;
+  // Find the latest test in history that overlaps with the given time slot
+  const applicableOverrides = history.filter(record => 
+    record.deviceEuis?.includes(devEui) &&
+    record.startTime < slotEnd &&
+    (record.startTime + record.duration * 1000) > slotStart
+  );
 
-    // Check of overlapping interval
-    return t.startTime < slotEndTime && t.endTime > slotStartTime;
-  });
+  if (applicableOverrides.length === 0) return null;
 
-  if (overlapping.length > 0) {
-    // Return the level of the most recent overlapping entry
-    const sorted = [...overlapping].sort((a, b) => b.startTime - a.startTime);
-    return sorted[0].level;
-  }
+  // If multiple overrides match, the one that started most recently wins.
+  applicableOverrides.sort((a, b) => b.startTime - a.startTime);
 
-  return null;
+  return applicableOverrides[0].level;
 };

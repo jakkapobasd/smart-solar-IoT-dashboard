@@ -646,9 +646,9 @@ const Reports: React.FC = () => {
         </div>
 
         {/* Filters and Command Actions Row */}
-        <div className="flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-4 bg-slate-50 dark:bg-slate-950/20 rounded-2xl p-4 border border-slate-100 dark:border-slate-800/60">
+        <div className="flex flex-col md:flex-row items-center justify-between gap-4 bg-slate-50 dark:bg-slate-950/20 rounded-2xl p-4 border border-slate-100 dark:border-slate-800/60">
           
-          <div className="flex flex-col md:flex-row items-stretch md:items-center gap-3">
+          <div className="flex flex-col sm:flex-row items-center gap-3">
             
             {/* Device Filtering option */}
             <div className="flex items-center space-x-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 shadow-sm text-sm">
@@ -689,41 +689,36 @@ const Reports: React.FC = () => {
 
           </div>
 
-          {/* Action buttons mirroring Image 1 */}
-          <div className="flex items-center gap-3 self-end xl:self-auto shrink-0 w-full xl:w-auto">
+          <div className="flex items-center gap-3 shrink-0">
             
             {/* Preview eye button */}
             <button 
               onClick={handlePreview}
               disabled={loading}
-              className="flex-1 xl:flex-none flex items-center justify-center space-x-2 px-5 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-350 font-bold rounded-xl text-xs hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all shadow-sm shrink-0 cursor-pointer disabled:opacity-50"
+              className="flex items-center justify-center space-x-2 px-5 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-350 font-bold rounded-xl text-xs hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all shadow-sm shrink-0 cursor-pointer disabled:opacity-50"
             >
               {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-500" /> : <Eye className="w-3.5 h-3.5 text-slate-500" />}
               <span>{loading ? "Loading..." : "Preview"}</span>
             </button>
 
-            {/* Export XLS button */}
             <button 
               onClick={handleExport}
               disabled={loading || previewData.length === 0}
-              className="flex-1 xl:flex-none flex items-center justify-center space-x-2 px-5 py-2.5 bg-[rgb(90,87,251)] hover:bg-[rgb(75,72,230)] disabled:bg-slate-400 disabled:shadow-none text-white font-bold rounded-xl text-xs shadow-md shadow-indigo-500/10 transition-all shrink-0 cursor-pointer"
+              className="flex items-center justify-center space-x-2 px-5 py-2.5 bg-[rgb(90,87,251)] hover:bg-[rgb(75,72,230)] disabled:bg-slate-400 disabled:shadow-none text-white font-bold rounded-xl text-xs shadow-md shadow-indigo-500/10 transition-all shrink-0 cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" />
               <span>Export.xls</span>
             </button>
 
-            {/* Download PDF Report button */}
             <button 
               onClick={handleDownloadPDF}
               disabled={loading || previewData.length === 0}
-              className="flex-1 xl:flex-none flex items-center justify-center space-x-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-400 disabled:shadow-none text-white font-bold rounded-xl text-xs shadow-md shadow-emerald-500/10 transition-all shrink-0 cursor-pointer"
+              className="flex items-center justify-center space-x-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-400 disabled:shadow-none text-white font-bold rounded-xl text-xs shadow-md shadow-emerald-500/10 transition-all shrink-0 cursor-pointer"
             >
               <FileText className="w-3.5 h-3.5" />
               <span>Download PDF Report</span>
             </button>
-
           </div>
-
         </div>
 
         {/* Daily Energy Summary Header */}
