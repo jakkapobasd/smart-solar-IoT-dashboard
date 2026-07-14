@@ -537,15 +537,6 @@ const Devices: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto xl:justify-end text-xs font-bold text-slate-650 dark:text-slate-300">
-            {/* Segmented refresh controls */}
-            <div className="flex rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 shadow-sm shrink-0">
-              <button onClick={() => setRefreshInterval(null)} className={cn("px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer", refreshInterval === null ? "bg-blue-600 text-white" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700")}>Off</button>
-              <button onClick={() => setRefreshInterval(10)} className={cn("px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer", refreshInterval === 10 ? "bg-blue-600 text-white" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700")}>10s</button>
-              <button onClick={() => setRefreshInterval(30)} className={cn("px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer", refreshInterval === 30 ? "bg-blue-600 text-white" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700")}>30s</button>
-              <button onClick={() => setRefreshInterval(60)} className={cn("px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer", refreshInterval === 60 ? "bg-blue-600 text-white" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700")}>1m</button>
-              <button onClick={() => setRefreshInterval(300)} className={cn("px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer", refreshInterval === 300 ? "bg-blue-600 text-white" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700")}>5m</button>
-            </div>
-
             {/* Refresh Now Button */}
             <button
               onClick={fetchData}
@@ -554,6 +545,15 @@ const Devices: React.FC = () => {
               <RefreshCcw className={cn("w-3.5 h-3.5 text-slate-500 dark:text-slate-400", loading && "animate-spin")} />
               <span>Refresh Now</span>
             </button>
+            
+            {/* Segmented refresh controls */}
+            <div className="flex rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 shadow-sm shrink-0">
+              <button onClick={() => setRefreshInterval(null)} className={cn("px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer", refreshInterval === null ? "bg-blue-600 text-white" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700")}>Off</button>
+              <button onClick={() => setRefreshInterval(10)} className={cn("px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer", refreshInterval === 10 ? "bg-blue-600 text-white" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700")}>10s</button>
+              <button onClick={() => setRefreshInterval(30)} className={cn("px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer", refreshInterval === 30 ? "bg-blue-600 text-white" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700")}>30s</button>
+              <button onClick={() => setRefreshInterval(60)} className={cn("px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer", refreshInterval === 60 ? "bg-blue-600 text-white" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700")}>1m</button>
+              <button onClick={() => setRefreshInterval(300)} className={cn("px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer", refreshInterval === 300 ? "bg-blue-600 text-white" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700")}>5m</button>
+            </div>
 
             {/* Live Count Indicators */}
             <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1 text-xs font-bold text-slate-500 dark:text-slate-400 border-l border-transparent sm:border-slate-150 sm:dark:border-slate-800/60 pl-0 sm:pl-3.5 shrink-0">

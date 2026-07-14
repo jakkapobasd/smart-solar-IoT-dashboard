@@ -282,6 +282,32 @@ const Settings: React.FC = () => {
     }
   };
 
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      // Prevent the mini-infobar from appearing on mobile
+      e.preventDefault();
+      // Stash the event so it can be triggered later.
+      setDeferredPrompt(e);
+      // Update UI to notify the user they can install the PWA
+      setPwaActive(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    // Check if the app is running in standalone mode
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      setIsStandalone(true);
+    }
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  const handleInstallClick = () => {
+    if (deferredPrompt) deferredPrompt.prompt();
+  };
+
   return (
     <div className="space-y-6">
       <div className="space-y-6">
@@ -329,6 +355,22 @@ const Settings: React.FC = () => {
               <span className="font-mono text-xs font-bold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-650 px-2.5 py-1 rounded-xl">600s checkback</span>
             </div>
           </div>
+
+          {pwaActive && !isStandalone && (
+            <div className="p-4 bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800/60 rounded-2xl flex justify-between items-center animate-in fade-in duration-300">
+              <div>
+                <p className="text-xs font-bold text-slate-707 dark:text-slate-200">Install Desktop App</p>
+                <p className="text-[11px] text-slate-400 leading-normal mt-1">ติดตั้งแอปพลิเคชันลงบนเดสก์ท็อปเพื่อการเข้าถึงที่รวดเร็วยิ่งขึ้น</p>
+              </div>
+              <button
+                onClick={handleInstallClick}
+                className="flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-500/10 transition-all"
+              >
+                <Download className="w-4 h-4" />
+                <span>Install App</span>
+              </button>
+            </div>
+          )}
         </div>
 
 
