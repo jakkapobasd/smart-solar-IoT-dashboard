@@ -65,6 +65,16 @@ const Settings: React.FC = () => {
   const [isStandalone, setIsStandalone] = useState(false);
   const [pwaActive, setPwaActive] = useState(false);
 
+  // Email Alerting States
+  const [recipientEmail, setRecipientEmail] = useState('');
+  const [alertTriggers, setAlertTriggers] = useState({
+    offline: true,
+    lowBattery: false,
+  });
+  const [isSaving, setIsSaving] = useState(false);
+  const [toast, setToast] = useState<{ show: boolean; message: string; type: 'success' | 'error' } | null>(null);
+
+
   // Push Notification States
   const [notificationSupport, setNotificationSupport] = useState<boolean>(false);
   const [notificationPermission, setNotificationPermission] = useState<string>('default');
@@ -308,6 +318,28 @@ const Settings: React.FC = () => {
     if (deferredPrompt) deferredPrompt.prompt();
   };
 
+  const handleEmailConfigSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSaving(true);
+    try {
+      // Mock API call
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      console.log("Saving email config:", { recipientEmail, alertTriggers });
+      setToast({ show: true, message: 'บันทึกการตั้งค่าอีเมลสำเร็จ', type: 'success' });
+    } catch (err) {
+      setToast({ show: true, message: 'บันทึกการตั้งค่าล้มเหลว', type: 'error' });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    if (toast?.show) {
+      const timer = setTimeout(() => setToast(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
+
   return (
     <div className="space-y-6">
       <div className="space-y-6">
@@ -373,6 +405,20 @@ const Settings: React.FC = () => {
           )}
         </div>
 
+        {/* Toast for Email Config */}
+        {toast && (
+          <div className={cn(
+            "fixed bottom-5 right-5 z-[10000] flex items-center p-4 rounded-2xl shadow-2xl border text-xs sm:text-sm font-semibold transition-all duration-300 transform scale-100 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md animate-bounce",
+            toast.type === 'success' 
+              ? "text-emerald-600 dark:text-emerald-400 border-emerald-500/30"
+              : "text-red-500 dark:text-red-400 border-red-500/30"
+          )}>
+            <div className="mr-3">
+              {toast.type === 'success' ? <CheckCircle2 className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
+            </div>
+            <span>{toast.message}</span>
+          </div>
+        )}
 
     </div>
   </div>
