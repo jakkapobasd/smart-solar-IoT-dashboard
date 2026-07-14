@@ -20,9 +20,9 @@ export default defineConfig(() => {
     server: {
       proxy: {
         '/api/proxy': {
-          target: 'https://smartsolar-th.com/api/v1',
+          target: 'https://smartsolar-th.com',
           changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/api\/proxy/, ''),
+          rewrite: (path) => path.replace(/^\/api\/proxy/, '/api'),
         },
       },
       // Enforce HMR to be enabled

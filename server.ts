@@ -243,64 +243,6 @@ app.get("/api/proxy/applications/summary", async (req, res) => {
   });
 });
 
-// Proxy API requests to the real backend
-app.all("/api/proxy*", async (req, res) => {
-  const requestPath = req.url.replace("/api/proxy", "");
-  const url = `${targetUrl}${requestPath}`;
-
-  try {
-    const contentType = req.headers["content-type"] || "application/json";
-    let body: any = undefined;
-    const hasBody = ["POST", "PUT", "PATCH"].includes(req.method);
-
-    if (hasBody) {
-      if (contentType.includes("application/x-www-form-urlencoded")) {
-        const params = new URLSearchParams();
-        for (const key in req.body) {
-          params.append(key, req.body[key]);
-        }
-        body = params.toString();
-      } else {
-        body = JSON.stringify(req.body);
-      }
-    }
-
-    const headers = getForwardHeaders(req);
-    if (hasBody) {
-      headers["content-type"] = contentType;
-    }
-
-    const response = await fetch(url, { method: req.method, headers, body });
-    const responseContentType = response.headers.get("content-type") || "";
-    const text = await response.text();
-    let data: any = null;
-    let isJson = false;
-
-    if (text) {
-      if (responseContentType.includes("application/json")) {
-        try {
-          data = JSON.parse(text);
-          isJson = true;
-        } catch (e) {
-          data = { message: text };
-        }
-      } else {
-        data = { message: text };
-      }
-    }
-
-    if (isJson) {
-      res.status(response.status).json(data);
-    } else {
-      if (responseContentType) res.setHeader("content-type", responseContentType);
-      res.status(response.status).send(text);
-    }
-  } catch (error: any) {
-    console.error("Proxy error:", error);
-    res.status(500).json({ error: "Failed to fetch from real cloud", details: error.message });
-  }
-});
-
 // Serve static files
 app.use("/leaflet", express.static(path.join(process.cwd(), "public/leaflet")));
 
