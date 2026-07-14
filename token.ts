@@ -23,7 +23,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // The target URL for the real authentication API.
   // Use an environment variable for flexibility, with a fallback.
-  const targetUrl = process.env.VITE_API_BASE_URL || "https://smartsolar-th.com/api/v1";
+  const targetUrl = process.env.VITE_API_BASE_URL || "https://smartsolar-th.com/api";
   const authUrl = `${targetUrl}/auth/token`;
 
   try {
