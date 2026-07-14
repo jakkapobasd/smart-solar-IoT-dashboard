@@ -1,8 +1,4 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import dotenv from 'dotenv';
-
-// Load environment variables
-dotenv.config();
 
 /**
  * This is a Vercel Serverless Function that acts as a proxy specifically for the
