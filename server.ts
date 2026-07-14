@@ -182,7 +182,13 @@ function syncMappingsAsync(mappings: any) {
   });
 }
 
-const targetUrl = "https://smartsolar-th.com/api/v1";
+// Use an environment variable for the target API URL, with a fallback for local development.
+// This allows the Vercel deployment to use the correct production API endpoint.
+const targetUrl = process.env.VITE_API_BASE_URL || "https://smartsolar-th.com/api/v1";
+
+console.log(`[PROXY] Initialized. Target API URL: ${targetUrl}`);
+
+
 
 // 🔧 เรียก function เพื่อให้แน่ใจว่า directory มีอยู่ก่อนใช้งาน
 ensureMappingsDirectory();
