@@ -48,8 +48,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       body: params.toString(),
     });
 
+    const responseContentType = apiResponse.headers.get("content-type") || "";
+    const responseText = await apiResponse.text();
+
+    // If the upstream response is not JSON, we should not try to parse it as such.
+    // This prevents crashes when the upstream API returns an HTML error page, for example.
+    if (responseContentType.includes("application/json")) {
+      try {
+        const jsonResponse = JSON.parse(responseText);
+        return res.status(apiResponse.status).json(jsonResponse);
+      } catch (jsonError: any) {
+        console.error('Auth proxy JSON parsing error:', jsonError);
+        // The upstream claimed it was JSON, but it wasn't. Return an error.
+        return res.status(502).json({ error: 'Bad Gateway: Invalid JSON response from authentication service.' });
+      }
+    }
+
     // Send the response from the ChirpStack API back to the original client
-    res.status(apiResponse.status).json(await apiResponse.json());
+    res.status(apiResponse.status).setHeader('Content-Type', responseContentType).send(responseText);
   } catch (error: any) {
     console.error('Auth proxy error:', error);
     res.status(500).json({ error: 'Failed to fetch from authentication service', details: error.message });
