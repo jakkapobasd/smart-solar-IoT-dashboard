@@ -1,19 +1,22 @@
 {
   "version": 2,
   "builds": [
-    {
-      "src": "server.ts",
-      "use": "@vercel/node"
-    },
+    // Build the frontend static assets
     {
       "src": "package.json",
-      "use": "@vercel/static-build"
+      "use": "@vercel/static-build",
+      "config": { "distDir": "dist" }
+    },
+    // Build the serverless function from the api directory
+    {
+      "src": "api/index.ts",
+      "use": "@vercel/node"
     }
   ],
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "/server.ts"
+      "destination": "/api/index.ts"
     },
     {
       "source": "/(.*)",
