@@ -20,6 +20,10 @@ const Login: React.FC = () => {
       await login({ username, password });
       navigate('/');
     } catch (err: any) {
+      if (err.response && err.response.status >= 500) {
+        setError('A server error occurred. Please try again later.');
+        return;
+      }
       // Handle the case where err.response?.data?.detail is an array or object
       const errorDetail = err.response?.data?.detail;
       let errorMessage = 'Login failed. Please check your credentials.';
