@@ -223,6 +223,46 @@ function getForwardHeaders(req: express.Request): Record<string, string> {
 }
 
 // =================================================================
+// 🚀 GENERIC PROXY HANDLER
+// =================================================================
+app.all("/api/proxy/*", async (req, res) => {
+  const destinationPath = req.path.replace("/api/proxy", "");
+  const destinationUrl = new URL(destinationPath, targetUrl);
+
+  // Append original query parameters
+  const originalUrl = new URL(req.originalUrl, `http://${req.headers.host}`);
+  destinationUrl.search = originalUrl.search;
+
+  console.log(`[PROXY] Forwarding ${req.method} ${req.path} -> ${destinationUrl.toString()}`);
+
+  try {
+    const proxyRes = await fetch(destinationUrl.toString(), {
+      method: req.method,
+      headers: {
+        ...getForwardHeaders(req),
+        'Content-Type': req.headers['content-type'] || 'application/json',
+      },
+      body: (req.method !== 'GET' && req.method !== 'HEAD' && req.body) ? JSON.stringify(req.body) : undefined,
+    });
+
+    // Forward status and headers from the target response
+    res.status(proxyRes.status);
+    proxyRes.headers.forEach((value, name) => {
+      // Avoid setting headers that can cause issues, like 'content-encoding'
+      if (name.toLowerCase() !== 'content-encoding' && name.toLowerCase() !== 'transfer-encoding') {
+        res.setHeader(name, value);
+      }
+    });
+
+    // Stream the response body back to the client
+    proxyRes.body?.pipeTo(new WritableStream({ write: (chunk) => res.write(chunk), close: () => res.end() }));
+  } catch (error: any) {
+    console.error(`[PROXY] Error forwarding request to ${destinationUrl}:`, error.message);
+    res.status(502).json({ error: "Bad Gateway", message: error.message });
+  }
+});
+
+// =================================================================
 // ✨ EXAMPLE: Specific API Interceptor
 // =================================================================
 // This handler will specifically intercept GET requests to '/api/proxy/applications/summary'.
