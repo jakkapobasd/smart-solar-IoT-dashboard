@@ -65,6 +65,16 @@ const Settings: React.FC = () => {
   const [isStandalone, setIsStandalone] = useState(false);
   const [pwaActive, setPwaActive] = useState(false);
 
+  // Email Alerting States
+  const [recipientEmail, setRecipientEmail] = useState('');
+  const [alertTriggers, setAlertTriggers] = useState({
+    offline: true,
+    lowBattery: false,
+  });
+  const [isSaving, setIsSaving] = useState(false);
+  const [toast, setToast] = useState<{ show: boolean; message: string; type: 'success' | 'error' } | null>(null);
+
+
   // Push Notification States
   const [notificationSupport, setNotificationSupport] = useState<boolean>(false);
   const [notificationPermission, setNotificationPermission] = useState<string>('default');
@@ -282,6 +292,54 @@ const Settings: React.FC = () => {
     }
   };
 
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      // Prevent the mini-infobar from appearing on mobile
+      e.preventDefault();
+      // Stash the event so it can be triggered later.
+      setDeferredPrompt(e);
+      // Update UI to notify the user they can install the PWA
+      setPwaActive(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    // Check if the app is running in standalone mode
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      setIsStandalone(true);
+    }
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  const handleInstallClick = () => {
+    if (deferredPrompt) deferredPrompt.prompt();
+  };
+
+  const handleEmailConfigSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSaving(true);
+    try {
+      // Mock API call
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      console.log("Saving email config:", { recipientEmail, alertTriggers });
+      setToast({ show: true, message: 'บันทึกการตั้งค่าอีเมลสำเร็จ', type: 'success' });
+    } catch (err) {
+      setToast({ show: true, message: 'บันทึกการตั้งค่าล้มเหลว', type: 'error' });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    if (toast?.show) {
+      const timer = setTimeout(() => setToast(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
+
   return (
     <div className="space-y-6">
       <div className="space-y-6">
@@ -329,8 +387,38 @@ const Settings: React.FC = () => {
               <span className="font-mono text-xs font-bold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-650 px-2.5 py-1 rounded-xl">600s checkback</span>
             </div>
           </div>
+
+          {pwaActive && !isStandalone && (
+            <div className="p-4 bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800/60 rounded-2xl flex justify-between items-center animate-in fade-in duration-300">
+              <div>
+                <p className="text-xs font-bold text-slate-707 dark:text-slate-200">Install Desktop App</p>
+                <p className="text-[11px] text-slate-400 leading-normal mt-1">ติดตั้งแอปพลิเคชันลงบนเดสก์ท็อปเพื่อการเข้าถึงที่รวดเร็วยิ่งขึ้น</p>
+              </div>
+              <button
+                onClick={handleInstallClick}
+                className="flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-500/10 transition-all"
+              >
+                <Download className="w-4 h-4" />
+                <span>Install App</span>
+              </button>
+            </div>
+          )}
         </div>
 
+        {/* Toast for Email Config */}
+        {toast && (
+          <div className={cn(
+            "fixed bottom-5 right-5 z-[10000] flex items-center p-4 rounded-2xl shadow-2xl border text-xs sm:text-sm font-semibold transition-all duration-300 transform scale-100 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md animate-bounce",
+            toast.type === 'success' 
+              ? "text-emerald-600 dark:text-emerald-400 border-emerald-500/30"
+              : "text-red-500 dark:text-red-400 border-red-500/30"
+          )}>
+            <div className="mr-3">
+              {toast.type === 'success' ? <CheckCircle2 className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
+            </div>
+            <span>{toast.message}</span>
+          </div>
+        )}
 
     </div>
   </div>

@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
@@ -183,7 +182,13 @@ function syncMappingsAsync(mappings: any) {
   });
 }
 
-const targetUrl = "https://smartsolar-th.com/api/v1";
+// Use an environment variable for the target API URL, with a fallback for local development.
+// This allows the Vercel deployment to use the correct production API endpoint.
+const targetUrl = process.env.VITE_API_BASE_URL || "https://smartsolar-th.com/api/v1";
+
+console.log(`[PROXY] Initialized. Target API URL: ${targetUrl}`);
+
+
 
 // 🔧 เรียก function เพื่อให้แน่ใจว่า directory มีอยู่ก่อนใช้งาน
 ensureMappingsDirectory();
@@ -218,6 +223,46 @@ function getForwardHeaders(req: express.Request): Record<string, string> {
 }
 
 // =================================================================
+// 🚀 GENERIC PROXY HANDLER
+// =================================================================
+app.all("/api/proxy/*", async (req, res) => {
+  const destinationPath = req.path.replace("/api/proxy", "");
+  const destinationUrl = new URL(destinationPath, targetUrl);
+
+  // Append original query parameters
+  const originalUrl = new URL(req.originalUrl, `http://${req.headers.host}`);
+  destinationUrl.search = originalUrl.search;
+
+  console.log(`[PROXY] Forwarding ${req.method} ${req.path} -> ${destinationUrl.toString()}`);
+
+  try {
+    const proxyRes = await fetch(destinationUrl.toString(), {
+      method: req.method,
+      headers: {
+        ...getForwardHeaders(req),
+        'Content-Type': req.headers['content-type'] || 'application/json',
+      },
+      body: (req.method !== 'GET' && req.method !== 'HEAD' && req.body) ? JSON.stringify(req.body) : undefined,
+    });
+
+    // Forward status and headers from the target response
+    res.status(proxyRes.status);
+    proxyRes.headers.forEach((value, name) => {
+      // Avoid setting headers that can cause issues, like 'content-encoding'
+      if (name.toLowerCase() !== 'content-encoding' && name.toLowerCase() !== 'transfer-encoding') {
+        res.setHeader(name, value);
+      }
+    });
+
+    // Stream the response body back to the client
+    proxyRes.body?.pipeTo(new WritableStream({ write: (chunk) => res.write(chunk), close: () => res.end() }));
+  } catch (error: any) {
+    console.error(`[PROXY] Error forwarding request to ${destinationUrl}:`, error.message);
+    res.status(502).json({ error: "Bad Gateway", message: error.message });
+  }
+});
+
+// =================================================================
 // ✨ EXAMPLE: Specific API Interceptor
 // =================================================================
 // This handler will specifically intercept GET requests to '/api/proxy/applications/summary'.
@@ -236,64 +281,6 @@ app.get("/api/proxy/applications/summary", async (req, res) => {
     interceptedPath: req.path,
     originalQuery: req.query,
   });
-});
-
-// Proxy API requests to the real backend
-app.all("/api/proxy*", async (req, res) => {
-  const requestPath = req.url.replace("/api/proxy", "");
-  const url = `${targetUrl}${requestPath}`;
-
-  try {
-    const contentType = req.headers["content-type"] || "application/json";
-    let body: any = undefined;
-    const hasBody = ["POST", "PUT", "PATCH"].includes(req.method);
-
-    if (hasBody) {
-      if (contentType.includes("application/x-www-form-urlencoded")) {
-        const params = new URLSearchParams();
-        for (const key in req.body) {
-          params.append(key, req.body[key]);
-        }
-        body = params.toString();
-      } else {
-        body = JSON.stringify(req.body);
-      }
-    }
-
-    const headers = getForwardHeaders(req);
-    if (hasBody) {
-      headers["content-type"] = contentType;
-    }
-
-    const response = await fetch(url, { method: req.method, headers, body });
-    const responseContentType = response.headers.get("content-type") || "";
-    const text = await response.text();
-    let data: any = null;
-    let isJson = false;
-
-    if (text) {
-      if (responseContentType.includes("application/json")) {
-        try {
-          data = JSON.parse(text);
-          isJson = true;
-        } catch (e) {
-          data = { message: text };
-        }
-      } else {
-        data = { message: text };
-      }
-    }
-
-    if (isJson) {
-      res.status(response.status).json(data);
-    } else {
-      if (responseContentType) res.setHeader("content-type", responseContentType);
-      res.status(response.status).send(text);
-    }
-  } catch (error: any) {
-    console.error("Proxy error:", error);
-    res.status(500).json({ error: "Failed to fetch from real cloud", details: error.message });
-  }
 });
 
 // Serve static files
@@ -331,5 +318,3 @@ if (!process.env.VERCEL) {
 
 // 🔥 4. สำคัญที่สุด: ส่งออก app ให้ Vercel เรียกใช้ได้โดยตรง 🔥
 export default app;
-=======
->>>>>>> 0996af7bdbdbc4e0cac0399586f5bea08195d640

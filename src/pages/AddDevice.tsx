@@ -89,6 +89,10 @@ const LeafletOverlay: React.FC<LeafletOverlayProps> = ({ map, lng, lat, onClick,
 const AddDeviceMapComp: React.FC<{
   mapCenter: [number, number];
   mapZoom: number;
+<<<<<<< HEAD
+=======
+  registerMode: 'manual' | 'project';
+>>>>>>> 0996af7bdbdbc4e0cac0399586f5bea08195d640
   filteredProfileDevices: any[];
   activeDeviceEui: string;
   focusDeviceOnMap: (item: any) => void;
@@ -97,6 +101,10 @@ const AddDeviceMapComp: React.FC<{
 }> = ({
   mapCenter,
   mapZoom,
+<<<<<<< HEAD
+=======
+  registerMode,
+>>>>>>> 0996af7bdbdbc4e0cac0399586f5bea08195d640
   filteredProfileDevices,
   activeDeviceEui,
   focusDeviceOnMap,
@@ -168,6 +176,7 @@ const AddDeviceMapComp: React.FC<{
     <div ref={mapContainerRef} className="w-full h-full" style={{ minHeight: '500px' }}>
       {mapInstance && (
         <>
+<<<<<<< HEAD
           <LeafletOverlay
             map={mapInstance}
             lng={mapCenter[1]}
@@ -177,6 +186,41 @@ const AddDeviceMapComp: React.FC<{
               <span className="w-2.5 h-2.5 rounded-full bg-white animate-ping"></span>
             </div>
           </LeafletOverlay>
+=======
+          {registerMode === 'project' ? (
+            filteredProfileDevices.map((item, index) => {
+              const isSelected = activeDeviceEui === item.devEui;
+              return (
+                <LeafletOverlay
+                  key={item.devEui || index}
+                  map={mapInstance}
+                  lng={item.longitude || 100.5018}
+                  lat={item.latitude || 13.7563}
+                  onClick={() => focusDeviceOnMap(item)}
+                >
+                  <div className={cn("relative flex items-center justify-center transition-all cursor-pointer", isSelected ? 'scale-125' : 'hover:scale-110')}>
+                    <span className={cn("absolute p-4 rounded-full", isSelected ? 'bg-blue-500/30 animate-pulse' : 'bg-transparent')}></span>
+                    <svg className="w-8 h-10 drop-shadow-md" viewBox="0 0 36 46" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M18 0C8.06 0 0 8.06 0 18c0 14 18 28 18 28s18-14 18-28c0-9.94-8.06-18-18-18z" fill={isSelected ? '#1e3a8a' : '#475569'} />
+                      <path d="M18 1.5C9.44 1.5 2.5 8.44 2.5 18c0 12.3 15.5 25.4 15.5 25.4S33.5 30.3 33.5 18C33.5 8.44 26.56 1.5 18 1.5z" fill={isSelected ? '#3b82f6' : '#94a3b8'} />
+                      <circle cx="18" cy="18" r="6" fill="#ffffff" />
+                    </svg>
+                  </div>
+                </LeafletOverlay>
+              );
+            })
+          ) : (
+            <LeafletOverlay
+              map={mapInstance}
+              lng={mapCenter[1]}
+              lat={mapCenter[0]}
+            >
+              <div className="w-8 h-8 rounded-full bg-blue-500 border-2 border-white shadow-xl flex items-center justify-center">
+                <span className="w-2.5 h-2.5 rounded-full bg-white animate-ping"></span>
+              </div>
+            </LeafletOverlay>
+          )}
+>>>>>>> 0996af7bdbdbc4e0cac0399586f5bea08195d640
         </>
       )}
     </div>
@@ -190,6 +234,12 @@ const AddDevice: React.FC = () => {
   // Checking permissions: Only super admin or tenant admin can manage
   const canManage = !!(user?.isAdmin || user?.isTenantAdmin);
 
+<<<<<<< HEAD
+=======
+  // Tabs: 'manual' (Traditional Form Setup) or 'project' (Auto Import from pre-configured lists)
+  const registerMode = 'manual';
+
+>>>>>>> 0996af7bdbdbc4e0cac0399586f5bea08195d640
   // Metadata arrays
   const [groups, setGroups] = useState<any[]>([]);
   const [gateways, setGateways] = useState<any[]>([]);
@@ -198,6 +248,7 @@ const AddDevice: React.FC = () => {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [deviceProfiles, setDeviceProfiles] = useState<any[]>([]);
 
+<<<<<<< HEAD
   const getProfileId = (profileName: string): string => {
     const found = deviceProfiles.find(p => 
       p.name?.toLowerCase().includes(profileName.toLowerCase()) || 
@@ -211,6 +262,17 @@ const AddDevice: React.FC = () => {
     }
     return "00000000-0000-0000-0000-000000000000"; // realistic default fallback UUID
   };
+=======
+  // States for "Import from Profile" mode
+  const [allAppDevices, setAllAppDevices] = useState<any[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<string>('');
+  const [profileDevices, setProfileDevices] = useState<any[]>([]);
+  const [loadingProfileDevices, setLoadingProfileDevices] = useState(false);
+  const [deviceSearchTerm, setDeviceSearchTerm] = useState('');
+  const [selectedProjDevices, setSelectedProjDevices] = useState<string[]>([]); // Selected DevEUIs
+  const [activeDeviceEui, setActiveDeviceEui] = useState<string>('');
+  const [hideRegistered, setHideRegistered] = useState<boolean>(true);
+>>>>>>> 0996af7bdbdbc4e0cac0399586f5bea08195d640
 
   // Form State for manual registration
   const [formData, setFormData] = useState({
@@ -228,6 +290,20 @@ const AddDevice: React.FC = () => {
 
   const [mapCenter, setMapCenter] = useState<[number, number]>([13.7563, 100.5018]);
   const [mapZoom, setMapZoom] = useState(13);
+
+  const getProfileId = (profileName: string): string => {
+    const found = deviceProfiles.find(p => 
+      p.name?.toLowerCase().includes(profileName.toLowerCase()) || 
+      profileName.toLowerCase().includes(p.name?.toLowerCase() || '')
+    );
+    if (found) {
+      return found.id || found.deviceProfileId;
+    }
+    if (deviceProfiles.length > 0) {
+      return deviceProfiles[0].id || deviceProfiles[0].deviceProfileId;
+    }
+    return "00000000-0000-0000-0000-000000000000"; // realistic default fallback UUID
+  };
 
   const handleBoundsChange = (center: [number, number], zoom: number) => {
     setMapCenter(center);
@@ -249,7 +325,14 @@ const AddDevice: React.FC = () => {
         api.get('/devices', { params: { applicationId: user.applicationId, limit: 500 } }),
         user.tenantId ? DeviceService.getDeviceProfiles(user.tenantId, 100) : Promise.resolve({ data: { result: [] } })
       ]);
+<<<<<<< HEAD
       const allDevicesList = allDevsRes.data.result || [];
+=======
+      setGroups(groupRes.data.result || []);
+      setGateways(gwRes.data.result || []);
+      const allDevicesList = allDevsRes.data.result || [];
+      setAllAppDevices(allDevicesList);
+>>>>>>> 0996af7bdbdbc4e0cac0399586f5bea08195d640
       setExistingDevEuis(new Set(allDevicesList.map((d: any) => d.devEui)));
       const profiles = profilesRes?.data?.result || [];
       setDeviceProfiles(profiles);
@@ -275,6 +358,15 @@ const AddDevice: React.FC = () => {
     const latFixed = parseFloat(lat.toFixed(6));
     const lngFixed = parseFloat(lng.toFixed(6));
 
+<<<<<<< HEAD
+=======
+    if (registerMode === 'project' && activeDeviceEui) {
+      setProfileDevices(prev =>
+        prev.map(d => d.devEui === activeDeviceEui ? { ...d, latitude: latFixed, longitude: lngFixed } : d)
+      );
+    }
+
+>>>>>>> 0996af7bdbdbc4e0cac0399586f5bea08195d640
     setFormData(prev => ({
       ...prev,
       latitude: latFixed,
@@ -353,6 +445,10 @@ const AddDevice: React.FC = () => {
 
   // Map focus micro-interactions
   const focusDeviceOnMap = (device: any) => {
+<<<<<<< HEAD
+=======
+    setActiveDeviceEui(device.devEui);
+>>>>>>> 0996af7bdbdbc4e0cac0399586f5bea08195d640
     setMapCenter([device.latitude, device.longitude]);
     setMapZoom(16);
     // Autofill coordinate inputs too in case user wants to review
@@ -366,6 +462,20 @@ const AddDevice: React.FC = () => {
     }));
   };
 
+<<<<<<< HEAD
+=======
+  // Filters
+  const filteredProfileDevices = profileDevices.filter(d => {
+    const matchesSearch = (d.name || '').toLowerCase().includes(deviceSearchTerm.toLowerCase()) || 
+                          (d.devEui || '').toLowerCase().includes(deviceSearchTerm.toLowerCase());
+    if (!matchesSearch) return false;
+    if (hideRegistered && existingDevEuis.has(d.devEui)) {
+      return false;
+    }
+    return true;
+  });
+
+>>>>>>> 0996af7bdbdbc4e0cac0399586f5bea08195d640
   return (
     <div className="space-y-6 relative min-h-screen">
       {/* Toast Alert */}
@@ -441,7 +551,11 @@ const AddDevice: React.FC = () => {
             )}
 
             {/* MODE 2: FORM SETUP MANUAL REGISTRATION */}
+<<<<<<< HEAD
               <form onSubmit={handleManualSubmit} className="space-y-4 flex flex-col justify-between h-full">
+=======
+            <form onSubmit={handleManualSubmit} className="space-y-4 flex flex-col justify-between h-full">
+>>>>>>> 0996af7bdbdbc4e0cac0399586f5bea08195d640
                 <div className="space-y-4">
                   <div>
                     <h2 className="text-base font-bold text-slate-900 dark:text-white uppercase tracking-tight">
@@ -652,7 +766,11 @@ const AddDevice: React.FC = () => {
                     {loading ? 'Registering...' : 'Register Device 💾'}
                   </button>
                 </div>
+<<<<<<< HEAD
               </form>
+=======
+            </form>
+>>>>>>> 0996af7bdbdbc4e0cac0399586f5bea08195d640
           </div>
         </div>
 
@@ -673,7 +791,7 @@ const AddDevice: React.FC = () => {
                   onClick={() => {
                     if (navigator.geolocation) {
                       navigator.geolocation.getCurrentPosition((pos) => {
-                        const lat = parseFloat(pos.coords.latitude.toFixed(6));
+                        const lat = parseFloat(pos.coords.latitude.toFixed(6)); 
                         const lng = parseFloat(pos.coords.longitude.toFixed(6));
                         setFormData(prev => ({ ...prev, latitude: lat, longitude: lng }));
                         setMapCenter([lat, lng]);
@@ -696,8 +814,14 @@ const AddDevice: React.FC = () => {
               <AddDeviceMapComp
                 mapCenter={mapCenter}
                 mapZoom={mapZoom}
+<<<<<<< HEAD
                 filteredProfileDevices={[]}
                 activeDeviceEui={''}
+=======
+                registerMode={registerMode}
+                filteredProfileDevices={filteredProfileDevices}
+                activeDeviceEui={activeDeviceEui}
+>>>>>>> 0996af7bdbdbc4e0cac0399586f5bea08195d640
                 focusDeviceOnMap={focusDeviceOnMap}
                 handleMapClick={handleMapClick}
                 handleBoundsChange={handleBoundsChange}
