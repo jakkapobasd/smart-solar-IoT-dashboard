@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import { ref, onValue } from 'firebase/database';
 import {
   Chart as ChartJS,
   registerables
@@ -24,6 +25,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import api from '../lib/api';
+import { database } from '../lib/firebase-config';
 import { useAuth } from '../contexts/AuthContext';
 import { useAlerts } from '../contexts/AlertsContext';
 import DeviceMap from '../components/DeviceMap';
@@ -134,6 +136,8 @@ const Dashboard: React.FC = () => {
   useEffect(() => {
     if (!user?.tenantId || !user?.applicationId) return;
 
+    let isMounted = true;
+
     const fetchData = async (isManual = false) => {
       if (isRefreshingRef.current) {
         setOverlappingBlocked(prev => prev + 1);
@@ -141,6 +145,7 @@ const Dashboard: React.FC = () => {
       }
 
       isRefreshingRef.current = true;
+      if (isMounted)
       setIsRefreshing(true);
 
       try {
@@ -194,6 +199,8 @@ const Dashboard: React.FC = () => {
         }
 
         try {
+          if (!isMounted) return;
+
           // Process Gateway Status
           const gwList = gatewaysRes.data?.result || [];
           setGateways(gwList);
@@ -215,8 +222,8 @@ const Dashboard: React.FC = () => {
             if (!dev.lastSeenAt) devStatus.never++;
             else {
               const lastSeen = new Date(dev.lastSeenAt).getTime();
-              const diffHours = (now - lastSeen) / 3600000;
-              if (diffHours <= 1) {
+              const diffHours = (now - lastSeen) / (1000 * 60 * 60);
+              if (diffHours <= 2) {
                 devStatus.online++;
                 if (diffHours > 0.5) {
                   staleCount++;
@@ -241,27 +248,30 @@ const Dashboard: React.FC = () => {
           console.error("Dashboard stats processing error:", error);
         }
 
-        // 4. Fetch Monthly Summary (dynamic caching)
+        // 4. Fetch Monthly Summary from Firebase (dynamic caching)
         if (isCacheValid && cacheRef.current.energySummary) {
-          summaryRes = cacheRef.current.energySummary;
-          incrementSavings(3.5); // Cached monthly graph data saves approx 3.5 KB payload size
+            summaryRes = cacheRef.current.energySummary;
+            incrementSavings(3.5); // Cached monthly graph data saves approx 3.5 KB payload size
         } else {
-          try {
-            const start = new Date();
-            start.setDate(1);
-            start.setHours(0, 0, 0, 0);
-            const end = new Date();
-            summaryRes = await api.get(`/energy/${user.tenantId}/energy-summary`, {
-              params: { 
-                applicationId: user.applicationId,
-                startTs: start.toISOString(),
-                endTs: end.toISOString()
-              }
-            });
-            cacheRef.current.energySummary = summaryRes;
-            cacheRef.current.lastFetchTime = nowTs;
-          } catch (error) {
-            console.warn("Energy summary fetch failed, using fallback mock", error);
+            try {
+                const startOfMonth = new Date();
+                startOfMonth.setDate(1);
+                startOfMonth.setHours(0, 0, 0, 0);
+
+                summaryRes = await api.get(`/energy/${user.tenantId}/energy-summary`, {
+                    params: {
+                        applicationId: user.applicationId,
+                        startTs: startOfMonth.toISOString(),
+                        endTs: new Date().toISOString()
+                    }
+                });
+                cacheRef.current.energySummary = summaryRes;
+                cacheRef.current.lastFetchTime = nowTs;
+
+            } catch (error) {
+                console.warn("Energy summary API fetch failed, using fallback mock", error);
+            }
+            if (!summaryRes || !summaryRes.data || !summaryRes.data.summary) {
             const start = new Date();
             start.setDate(1);
             start.setHours(0, 0, 0, 0);
@@ -275,12 +285,21 @@ const Dashboard: React.FC = () => {
                 total_used_kwh: Math.random() * 15 + 5
               });
             }
-            summaryRes = { data: { summary: mockRawData } };
-          }
+                summaryRes = { data: { summary: mockRawData } };
+            }
         }
 
         if (summaryRes) {
+          if (!isMounted) return;
+
           const summaryData = summaryRes.data?.summary || summaryRes.data?.result || summaryRes.data?.data || summaryRes.data?.items || (Array.isArray(summaryRes.data) ? summaryRes.data : []);
+          console.log("📋 Summary data received:", {
+            type: typeof summaryData,
+            isArray: Array.isArray(summaryData),
+            length: Array.isArray(summaryData) ? summaryData.length : 'N/A',
+            sample: Array.isArray(summaryData) ? summaryData.slice(0, 2) : summaryData
+          });
+          
           const start = new Date();
           start.setDate(1);
           start.setHours(0, 0, 0, 0);
@@ -290,19 +309,32 @@ const Dashboard: React.FC = () => {
           end.setHours(23, 59, 59, 999);
 
           let cleansed = prepareData(summaryData, start, end);
+          console.log("📊 Prepared data:", {
+            labelsLength: cleansed.labels.length,
+            genLength: cleansed.gen.length,
+            usedLength: cleansed.used.length,
+            labels: cleansed.labels.slice(0, 5),
+            genSample: cleansed.gen.slice(0, 5),
+            usedSample: cleansed.used.slice(0, 5),
+          });
           
           setEnergySummary(cleansed);
         }
       } finally {
+        if (isMounted) {
         isRefreshingRef.current = false;
         setIsRefreshing(false);
+        }
       }
     };
 
     fetchData();
     if (refreshInterval === null) return;
     const interval = setInterval(() => fetchData(false), refreshInterval * 1000);
-    return () => clearInterval(interval);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, [user, refreshInterval]);
 
   // Canvas and Chart Instance References
@@ -352,83 +384,97 @@ const Dashboard: React.FC = () => {
   // 3. Chart Initialization (renderCharts)
   const renderCharts = (labels: string[], gen: (number | null)[], used: (number | null)[]) => {
     const ctx = energyCanvasRef.current?.getContext('2d');
-    if (!ctx) return;
+    if (!ctx) {
+      console.warn("❌ Canvas context not available");
+      return;
+    }
 
     if (energyChartRef.current) {
       // If instance exists, update it dynamically using the high-performance method
-      updateCharts(energyChartRef.current, labels, gen, used);
+      try {
+        updateCharts(energyChartRef.current, labels, gen, used);
+      } catch (err) {
+        console.error("❌ Error updating chart:", err);
+        energyChartRef.current.destroy();
+        energyChartRef.current = null;
+      }
     } else {
       // Initialize a new instance
-      energyChartRef.current = new ChartJS(ctx, {
-        type: 'bar',
-        data: {
-          labels,
-          datasets: [
-            {
-              label: 'Generation Energy (kWh)',
-              data: gen,
-              backgroundColor: '#478bf1',
-              borderColor: '#3b82f6',
-              borderWidth: 1,
-              borderRadius: 2,
-              barPercentage: 0.8,
-              categoryPercentage: 0.8,
-            },
-            {
-              label: 'Used Energy (kWh)',
-              data: used,
-              backgroundColor: '#fcca46',
-              borderColor: '#f59e0b',
-              borderWidth: 1,
-              borderRadius: 2,
-              barPercentage: 0.8,
-              categoryPercentage: 0.8,
-            }
-          ]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          interaction: {
-            mode: 'index',
-            intersect: false,
-          },
-          plugins: {
-            legend: {
-              display: true,
-              position: 'top',
-              align: 'center',
-              labels: {
-                usePointStyle: false,
-                boxWidth: 20,
-                boxHeight: 12,
-                color: '#64748b',
-                font: { family: 'Inter', size: 12 }
+      try {
+        energyChartRef.current = new ChartJS(ctx, {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [
+              {
+                label: 'Generation Energy (kWh)',
+                data: gen,
+                backgroundColor: '#478bf1',
+                borderColor: '#3b82f6',
+                borderWidth: 1,
+                borderRadius: 2,
+                barPercentage: 0.8,
+                categoryPercentage: 0.8,
+              },
+              {
+                label: 'Used Energy (kWh)',
+                data: used,
+                backgroundColor: '#fcca46',
+                borderColor: '#f59e0b',
+                borderWidth: 1,
+                borderRadius: 2,
+                barPercentage: 0.8,
+                categoryPercentage: 0.8,
               }
-            },
-            tooltip: {
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
               mode: 'index',
               intersect: false,
-              backgroundColor: '#0f172a',
-              titleFont: { size: 11, family: 'Inter', weight: 'bold' },
-              bodyFont: { size: 11, family: 'Inter' },
-              padding: 10,
-              cornerRadius: 8,
-            }
-          },
-          scales: {
-            y: {
-              beginAtZero: true,
-              grid: { color: 'rgba(148, 163, 184, 0.06)' },
-              ticks: { color: '#64748b', font: { size: 10, family: 'Inter' } }
             },
-            x: {
-              grid: { display: true, color: 'rgba(148, 163, 184, 0.15)', tickColor: 'transparent' },
-              ticks: { color: '#64748b', font: { size: 10, family: 'Inter' } }
+            plugins: {
+              legend: {
+                display: true,
+                position: 'top',
+                align: 'center',
+                labels: {
+                  usePointStyle: false,
+                  boxWidth: 20,
+                  boxHeight: 12,
+                  color: '#64748b',
+                  font: { family: 'Inter', size: 12 }
+                }
+              },
+              tooltip: {
+                mode: 'index',
+                intersect: false,
+                backgroundColor: '#0f172a',
+                titleFont: { size: 11, family: 'Inter', weight: 'bold' },
+                bodyFont: { size: 11, family: 'Inter' },
+                padding: 10,
+                cornerRadius: 8,
+              }
+            },
+            scales: {
+              y: {
+                beginAtZero: true,
+                grid: { color: 'rgba(148, 163, 184, 0.06)' },
+                ticks: { color: '#64748b', font: { size: 10, family: 'Inter' } }
+              },
+              x: {
+                grid: { display: true, color: 'rgba(148, 163, 184, 0.15)', tickColor: 'transparent' },
+                ticks: { color: '#64748b', font: { size: 10, family: 'Inter' } }
+              }
             }
           }
-        }
-      });
+        });
+        console.log("✅ Energy chart initialized");
+      } catch (err) {
+        console.error("❌ Error initializing chart:", err);
+      }
     }
   };
 
@@ -504,8 +550,17 @@ const Dashboard: React.FC = () => {
 
   // Synchronizers and cleanups
   useEffect(() => {
+    console.log("📊 energySummary updated:", {
+      labelsLength: energySummary.labels.length,
+      genLength: energySummary.gen.length,
+      usedLength: energySummary.used.length,
+      labels: energySummary.labels.slice(0, 5), // First 5 labels
+    });
+    
     if (energySummary.labels.length > 0) {
       renderCharts(energySummary.labels, energySummary.gen, energySummary.used);
+    } else {
+      console.warn("⚠️ No energy summary data available");
     }
   }, [energySummary]);
 
@@ -543,7 +598,7 @@ const Dashboard: React.FC = () => {
 
     const headers = ['Name', 'DevEUI', 'Status', 'Battery SOC', 'Battery Voltage', 'Latitude', 'Longitude', 'Last Seen'];
     const rows = devices.map(device => {
-      const isOnline = device.lastSeenAt && (Date.now() - new Date(device.lastSeenAt).getTime()) / 3600000 <= 1;
+      const isOnline = device.lastSeenAt && (Date.now() - new Date(device.lastSeenAt).getTime()) / 3600000 <= 2;
       const status = isOnline ? 'Online' : 'Offline';
       const lat = device.latitude ?? device.variables?.latitude ?? 'N/A';
       const lng = device.longitude ?? device.variables?.longitude ?? 'N/A';
@@ -707,7 +762,17 @@ const Dashboard: React.FC = () => {
             </div>
           </div>
           <div className="flex-1 min-h-[220px] relative">
-            <canvas ref={energyCanvasRef} />
+            <canvas 
+              ref={energyCanvasRef}
+              width={600}
+              height={300}
+              style={{ width: '100%', height: '100%' }}
+            />
+            {energySummary.labels.length === 0 && (
+              <div className="absolute inset-0 flex items-center justify-center bg-slate-50/50 dark:bg-slate-900/50 rounded">
+                <p className="text-sm text-slate-500 dark:text-slate-400">Loading energy data...</p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -771,7 +836,7 @@ const Dashboard: React.FC = () => {
           </button>
         </div>
         <div className="h-80 w-full rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800">
-           <DeviceMap devices={devices} gateways={gateways} isLoading={isRefreshing && devices.length === 0} hideDetailButton={true} />
+           <DeviceMap devices={devices} gateways={gateways} isLoading={isRefreshing && devices.length === 0} hideDetailButton={true} showWeatherControls={true} />
         </div>
       </section>
 

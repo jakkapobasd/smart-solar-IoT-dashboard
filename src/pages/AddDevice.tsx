@@ -65,10 +65,13 @@ const LeafletOverlay: React.FC<LeafletOverlayProps> = ({ map, lng, lat, onClick,
     return () => {
       el.removeEventListener('click', clickHandler);
       if (markerRef.current) {
+        // Failsafe cleanup
         try {
-          markerRef.current.remove();
+          if ((markerRef.current as any)._map) {
+            markerRef.current.remove();
+          }
         } catch (e) {
-          console.warn("Leaflet marker removal failed in AddDevice:", e);
+          // Ignore errors on cleanup as map might be gone already.
         }
       }
     };
@@ -86,18 +89,16 @@ const LeafletOverlay: React.FC<LeafletOverlayProps> = ({ map, lng, lat, onClick,
 const AddDeviceMapComp: React.FC<{
   mapCenter: [number, number];
   mapZoom: number;
-  registerMode: 'manual' | 'project';
-  filteredProjectDevices: any[];
-  activeProjectEui: string;
+  filteredProfileDevices: any[];
+  activeDeviceEui: string;
   focusDeviceOnMap: (item: any) => void;
   handleMapClick: (lat: number, lng: number) => void;
   handleBoundsChange: (center: [number, number], zoom: number) => void;
 }> = ({
   mapCenter,
   mapZoom,
-  registerMode,
-  filteredProjectDevices,
-  activeProjectEui,
+  filteredProfileDevices,
+  activeDeviceEui,
   focusDeviceOnMap,
   handleMapClick,
   handleBoundsChange
@@ -167,39 +168,15 @@ const AddDeviceMapComp: React.FC<{
     <div ref={mapContainerRef} className="w-full h-full" style={{ minHeight: '500px' }}>
       {mapInstance && (
         <>
-          {registerMode === 'project' ? (
-            filteredProjectDevices.map((item, index) => {
-              const isSelected = activeProjectEui === item.devEui;
-              return (
-                <LeafletOverlay
-                  key={item.devEui || index}
-                  map={mapInstance}
-                  lng={item.longitude || 100.5018}
-                  lat={item.latitude || 13.7563}
-                  onClick={() => focusDeviceOnMap(item)}
-                >
-                  <div className={cn("relative flex items-center justify-center transition-all cursor-pointer", isSelected ? 'scale-125' : 'hover:scale-110')}>
-                    <span className={cn("absolute p-4 rounded-full", isSelected ? 'bg-blue-500/30 animate-pulse' : 'bg-transparent')}></span>
-                    <svg className="w-8 h-10 drop-shadow-md" viewBox="0 0 36 46" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <path d="M18 0C8.06 0 0 8.06 0 18c0 14 18 28 18 28s18-14 18-28c0-9.94-8.06-18-18-18z" fill={isSelected ? '#1e3a8a' : '#475569'} />
-                      <path d="M18 1.5C9.44 1.5 2.5 8.44 2.5 18c0 12.3 15.5 25.4 15.5 25.4S33.5 30.3 33.5 18C33.5 8.44 26.56 1.5 18 1.5z" fill={isSelected ? '#3b82f6' : '#94a3b8'} />
-                      <circle cx="18" cy="18" r="6" fill="#ffffff" />
-                    </svg>
-                  </div>
-                </LeafletOverlay>
-              );
-            })
-          ) : (
-            <LeafletOverlay
-              map={mapInstance}
-              lng={mapCenter[1]}
-              lat={mapCenter[0]}
-            >
-              <div className="w-8 h-8 rounded-full bg-blue-500 border-2 border-white shadow-xl flex items-center justify-center">
-                <span className="w-2.5 h-2.5 rounded-full bg-white animate-ping"></span>
-              </div>
-            </LeafletOverlay>
-          )}
+          <LeafletOverlay
+            map={mapInstance}
+            lng={mapCenter[1]}
+            lat={mapCenter[0]}
+          >
+            <div className="w-8 h-8 rounded-full bg-blue-500 border-2 border-white shadow-xl flex items-center justify-center">
+              <span className="w-2.5 h-2.5 rounded-full bg-white animate-ping"></span>
+            </div>
+          </LeafletOverlay>
         </>
       )}
     </div>
@@ -212,9 +189,6 @@ const AddDevice: React.FC = () => {
   
   // Checking permissions: Only super admin or tenant admin can manage
   const canManage = !!(user?.isAdmin || user?.isTenantAdmin);
-
-  // Tabs: 'manual' (Traditional Form Setup) or 'project' (Auto Import from pre-configured lists)
-  const [registerMode, setRegisterMode] = useState<'manual' | 'project'>('project');
 
   // Metadata arrays
   const [groups, setGroups] = useState<any[]>([]);
@@ -237,16 +211,6 @@ const AddDevice: React.FC = () => {
     }
     return "00000000-0000-0000-0000-000000000000"; // realistic default fallback UUID
   };
-
-  // Project Templates Selection States
-  const [projects, setProjects] = useState<any[]>([]);
-  const [selectedProjId, setSelectedProjId] = useState<string>('');
-  const [projectDevices, setProjectDevices] = useState<any[]>([]);
-  const [loadingProjDevices, setLoadingProjDevices] = useState(false);
-  const [projectSearchTerm, setProjectSearchTerm] = useState('');
-  const [selectedProjDevices, setSelectedProjDevices] = useState<string[]>([]); // Selected DevEUIs
-  const [activeProjectEui, setActiveProjectEui] = useState<string>('');
-  const [hideRegistered, setHideRegistered] = useState<boolean>(true);
 
   // Form State for manual registration
   const [formData, setFormData] = useState({
@@ -279,18 +243,18 @@ const AddDevice: React.FC = () => {
   const fetchLocalConfigsAndDevices = async () => {
     if (!user?.applicationId) return;
     try {
-      const [groupRes, gwRes, activeDevsRes, profilesRes] = await Promise.all([
+      const [groupRes, gwRes, allDevsRes, profilesRes] = await Promise.all([
         api.get('/multicast-groups', { params: { applicationId: user.applicationId, limit: 100 } }),
         api.get('/gateways', { params: { tenantId: user.tenantId, limit: 100 } }),
-        api.get('/devices', { params: { applicationId: user.applicationId, limit: 200 } }),
+        api.get('/devices', { params: { applicationId: user.applicationId, limit: 500 } }),
         user.tenantId ? DeviceService.getDeviceProfiles(user.tenantId, 100) : Promise.resolve({ data: { result: [] } })
       ]);
-      setGroups(groupRes.data.result || []);
-      setGateways(gwRes.data.result || []);
-      setExistingDevEuis(new Set((activeDevsRes.data.result || []).map((d: any) => d.devEui)));
+      const allDevicesList = allDevsRes.data.result || [];
+      setExistingDevEuis(new Set(allDevicesList.map((d: any) => d.devEui)));
       const profiles = profilesRes?.data?.result || [];
       setDeviceProfiles(profiles);
       if (profiles.length > 0) {
+        setSelectedProfileId(profiles[0].id || profiles[0].deviceProfileId);
         setFormData(prev => ({
           ...prev,
           deviceProfile: profiles[0].name || prev.deviceProfile
@@ -305,141 +269,11 @@ const AddDevice: React.FC = () => {
     fetchLocalConfigsAndDevices();
   }, [user]);
 
-  // Fetch available projects (applications)
-  useEffect(() => {
-    const fetchProjects = async () => {
-      if (!user?.tenantId) return;
-      try {
-        const appsRes = await api.get('/applications', { params: { tenantId: user.tenantId, limit: 100 } });
-        let apps = appsRes.data.result || [];
-        
-        const mergedItems = [...apps];
-        setProjects(mergedItems);
-        
-        if (mergedItems.length > 0) {
-          setSelectedProjId(mergedItems[0].id);
-        }
-      } catch (err) {
-        console.error("Failed to fetch applications for project selection", err);
-      }
-    };
-    fetchProjects();
-  }, [user]);
-
-  // Dynamically load devices belonging to the chosen project/application
-  useEffect(() => {
-    const fetchProjDevices = async () => {
-      if (!selectedProjId) return;
-      setLoadingProjDevices(true);
-      setSelectedProjDevices([]); // Reset selections on project swap
-
-      const projObj = projects.find(p => p.id === selectedProjId);
-      
-      if (projObj?.isTemplate) {
-        // High fidelity simulated configurations for quick importing without typing
-        setTimeout(() => {
-          let mockList: any[] = [];
-          if (selectedProjId === 'template-wha-industrial') {
-            mockList = [
-              { devEui: '70B3D57ED0054321', appKey: '11223344556677889900AABBCCDDEEFF', name: 'WHA-Lantern-StreetLight-01', description: 'เสาไฟฟ้าโซลาร์เซลล์ WHA - โซนพลาซ่า 1', latitude: 13.7570, longitude: 100.5020, deviceProfile: 'LED Solar Street Light Profile' },
-              { devEui: '70B3D57ED0054322', appKey: '223344556677889900AABBCCDDEEFF11', name: 'WHA-Lantern-StreetLight-02', description: 'เสาไฟฟ้าโซลาร์เซลล์ WHA - ทางเข้าหลักโซน B', latitude: 13.7552, longitude: 100.5011, deviceProfile: 'LED Solar Street Light Profile' },
-              { devEui: '70B3D57ED0054323', appKey: '3344556677889900AABBCCDDEEFF1122', name: 'WHA-HighMastLight-03', description: 'โคมไฟส่องสว่างคลังสินค้าหลังใหญ่ WHA W1', latitude: 13.7582, longitude: 100.5034, deviceProfile: 'LED Solar Street Light Profile' },
-              { devEui: '70B3D57ED0054324', appKey: '44556677889900AABBCCDDEEFF112233', name: 'WHA-PV-SensorStation-04', description: 'สถานีตรวจวัดไฟฟ้าแสงแดด Smart Solar WHA', latitude: 13.7561, longitude: 100.5005, deviceProfile: 'Smart Photovoltaic Sensor Station' },
-              { devEui: '70B3D57ED0054325', appKey: '556677889900AABBCCDDEEFF11223344', name: 'WHA-GateActuator-05', description: 'อุปกรณ์เปิดปิดประตูปั๊มน้ำ คลาส C WHA', latitude: 13.7594, longitude: 100.5048, deviceProfile: 'Standard Class-C Actuator Model' }
-            ];
-          } else if (selectedProjId === 'template-amata-smart') {
-            mockList = [
-              { devEui: '70B3D57ED0065431', appKey: '8899AABBCCDDEEFF0011223344556677', name: 'AMATA-StreetLight-A21', description: 'โคมไฟส่องถนนอัจฉริยะ Amata โซนสวนอุตสาหกรรม Phase 4', latitude: 13.2215, longitude: 101.0118, deviceProfile: 'Standard Class-C Actuator Model' },
-              { devEui: '70B3D57ED0065432', appKey: '99AABBCCDDEEFF001122334455667788', name: 'AMATA-StreetLight-A22', description: 'โคมไฟส่องถนนหน้านิคมโซนตะวันออก Amata', latitude: 13.2225, longitude: 101.0125, deviceProfile: 'Standard Class-C Actuator Model' },
-              { devEui: '70B3D57ED0065433', appKey: 'AABBCCDDEEFF00112233445566778899', name: 'AMATA-SolarStation-10', description: 'เซ็นเซอร์ตรวจสอบแผงโซลาร์ Amata Solar Smart Center', latitude: 13.2205, longitude: 101.0102, deviceProfile: 'Smart Photovoltaic Sensor Station' }
-            ];
-          }
-          setProjectDevices(mockList);
-          setLoadingProjDevices(false);
-          // Auto-recenter map on the first element to make it interactive!
-          if (mockList.length > 0) {
-            setMapCenter([mockList[0].latitude, mockList[0].longitude]);
-          }
-        }, 400);
-      } else {
-        // Real ChirpStack application devices
-        try {
-          const devsRes = await api.get('/devices', { 
-            params: { applicationId: selectedProjId, limit: 150 }
-          } as any);
-          const realDevs = devsRes.data.result || [];
-          
-          const enriched = realDevs.map((d: any) => ({
-            devEui: d.devEui,
-            appKey: d.appKey || '00000000000000000000000000000000',
-            name: d.name,
-            description: d.description || '',
-            latitude: d.latitude || 13.7563,
-            longitude: d.longitude || 100.5018,
-            deviceProfile: d.tags?.deviceProfile || 'LED Solar Street Light Profile'
-          }));
-          
-          setProjectDevices(enriched);
-          if (enriched.length > 0) {
-            setMapCenter([enriched[0].latitude, enriched[0].longitude]);
-          }
-        } catch (err) {
-          console.error("Failed to load real project devices", err);
-          // Resilient fallback
-          setProjectDevices([]);
-        } finally {
-          setLoadingProjDevices(false);
-        }
-      }
-    };
-
-    fetchProjDevices();
-  }, [selectedProjId, projects]);
-
-  // Handle active project device default selection
-  useEffect(() => {
-    if (registerMode === 'project' && projectDevices.length > 0) {
-      const unassigned = projectDevices.find(d => !existingDevEuis.has(d.devEui));
-      if (unassigned) {
-        setActiveProjectEui(unassigned.devEui);
-        setFormData(prev => ({
-          ...prev,
-          latitude: unassigned.latitude || 13.7563,
-          longitude: unassigned.longitude || 100.5018,
-          name: unassigned.name,
-          devEui: unassigned.devEui,
-          appKey: unassigned.appKey
-        }));
-        setMapCenter([unassigned.latitude || 13.7563, unassigned.longitude || 100.5018]);
-      } else {
-        const firstDev = projectDevices[0];
-        setActiveProjectEui(firstDev.devEui);
-        setFormData(prev => ({
-          ...prev,
-          latitude: firstDev.latitude || 13.7563,
-          longitude: firstDev.longitude || 100.5018,
-          name: firstDev.name,
-          devEui: firstDev.devEui,
-          appKey: firstDev.appKey
-        }));
-        setMapCenter([firstDev.latitude || 13.7563, firstDev.longitude || 100.5018]);
-      }
-    } else {
-      setActiveProjectEui('');
-    }
-  }, [projectDevices, existingDevEuis, registerMode]);
-
   // Handle Map Click coordinate updates
   const handleMapClick = (lat: number, lng: number) => {
     if (!canManage) return;
     const latFixed = parseFloat(lat.toFixed(6));
     const lngFixed = parseFloat(lng.toFixed(6));
-
-    if (registerMode === 'project' && activeProjectEui) {
-      setProjectDevices(prev =>
-        prev.map(d => d.devEui === activeProjectEui ? { ...d, latitude: latFixed, longitude: lngFixed } : d)
-      );
-    }
 
     setFormData(prev => ({
       ...prev,
@@ -517,110 +351,8 @@ const AddDevice: React.FC = () => {
     }
   };
 
-  // Auto-Project Bulk Import Handler
-  const handleBulkImport = async () => {
-    if (!canManage) {
-      showToast('error', 'คุณไม่มีสิทธิ์ในการแก้ไขหรือลงทะเบียนอุปกรณ์ (Permission Denied)');
-      return;
-    }
-    if (selectedProjDevices.length === 0) {
-      showToast('error', 'กรุณาติ๊กเลือกอุปกรณ์ที่ต้องการนำเข้าอย่างน้อย 1 รายการ');
-      return;
-    }
-    if (!user?.applicationId || !user?.tenantId) {
-      showToast('error', 'Session attributes are invalid.');
-      return;
-    }
-
-    setLoading(true);
-    let successCount = 0;
-    let failedCount = 0;
-
-    for (const devEui of selectedProjDevices) {
-      const targetDev = projectDevices.find(d => d.devEui === devEui);
-      if (!targetDev) continue;
-
-      const isAlreadyLinked = existingDevEuis.has(targetDev.devEui);
-
-      try {
-        if (!isAlreadyLinked) {
-          const devicePayload = {
-            applicationId: user.applicationId,
-            tenantId: user.tenantId,
-            name: targetDev.name,
-            devEui: targetDev.devEui.trim(),
-            appKey: targetDev.appKey.trim(),
-            description: targetDev.description,
-            latitude: Number(targetDev.latitude),
-            longitude: Number(targetDev.longitude),
-            enabledClass: 'C',
-            deviceProfileId: getProfileId(targetDev.deviceProfile),
-            isDisabled: false,
-            skipFcntCheck: true,
-            tags: {
-              deviceProfile: targetDev.deviceProfile,
-              note: `Auto imported from Project: ${projects.find(p => p.id === selectedProjId)?.name || 'Sync'}`
-            }
-          };
-
-          await DeviceService.createDevice(devicePayload);
-        }
-
-        // Assign to multicast group if specified in background configuration
-        if (formData.multicastGroupId) {
-          try {
-            await DeviceService.addDeviceToGroup(formData.multicastGroupId, targetDev.devEui.trim());
-          } catch (errGroup) {
-            console.warn(`Assign group failed for EUI ${devEui}`, errGroup);
-          }
-        }
-
-        successCount++;
-      } catch (err) {
-        console.error(`Failed to register or assign ${devEui}:`, err);
-        failedCount++;
-      }
-    }
-
-    setLoading(false);
-    
-    // Sync active local list
-    await fetchLocalConfigsAndDevices();
-    setSelectedProjDevices([]); // Reset checked rows
-
-    if (successCount > 0) {
-      showToast('success', `สำเร็จ! นำเข้าแล้ว ${successCount} อุปกรณ์ ${failedCount > 0 ? `(ล้มเหลว ${failedCount})` : ''} เข้าโครงการปฏิบัติงานปัจจุบัน`);
-      setTimeout(() => {
-        navigate('/devices');
-      }, 1500);
-    } else {
-      showToast('error', 'ไม่สามารถบันทึกอุปกรณ์ได้ เนื่องจากไม่มีข้อมูลหรืออุปกรณ์ลงทะเบียนในระบบเรียบร้อยแล้ว');
-    }
-  };
-
-  // Checkbox Helper logic
-  const toggleSelectDevice = (devEui: string) => {
-    setSelectedProjDevices(prev => 
-      prev.includes(devEui) ? prev.filter(id => id !== devEui) : [...prev, devEui]
-    );
-  };
-
-  const toggleSelectAll = (filteredItems: any[]) => {
-    const allowedItems = filteredItems.filter(item => !existingDevEuis.has(item.devEui) || !!formData.multicastGroupId);
-    const allSelected = allowedItems.every(item => selectedProjDevices.includes(item.devEui));
-    
-    if (allSelected) {
-      const allowedEuis = allowedItems.map(i => i.devEui);
-      setSelectedProjDevices(prev => prev.filter(eui => !allowedEuis.includes(eui)));
-    } else {
-      const allowedEuis = allowedItems.map(i => i.devEui);
-      setSelectedProjDevices(prev => Array.from(new Set([...prev, ...allowedEuis])));
-    }
-  };
-
   // Map focus micro-interactions
   const focusDeviceOnMap = (device: any) => {
-    setActiveProjectEui(device.devEui);
     setMapCenter([device.latitude, device.longitude]);
     setMapZoom(16);
     // Autofill coordinate inputs too in case user wants to review
@@ -633,17 +365,6 @@ const AddDevice: React.FC = () => {
       appKey: device.appKey
     }));
   };
-
-  // Filters
-  const filteredProjectDevices = projectDevices.filter(d => {
-    const matchesSearch = d.name.toLowerCase().includes(projectSearchTerm.toLowerCase()) || 
-                          d.devEui.toLowerCase().includes(projectSearchTerm.toLowerCase());
-    if (!matchesSearch) return false;
-    if (hideRegistered && existingDevEuis.has(d.devEui)) {
-      return false;
-    }
-    return true;
-  });
 
   return (
     <div className="space-y-6 relative min-h-screen">
@@ -685,38 +406,6 @@ const AddDevice: React.FC = () => {
         )}
       </div>
 
-      {/* Segmented Mode Button Toggles */}
-      <div className="flex p-1 bg-slate-200/60 dark:bg-slate-900/40 rounded-2xl max-w-2xl border border-slate-200/50 dark:border-slate-800">
-        <button
-          type="button"
-          onClick={() => setRegisterMode('project')}
-          className={cn(
-            "flex-1 flex items-center justify-center gap-2.5 px-3 sm:px-5 py-2.5 rounded-xl text-[11px] sm:text-xs font-bold uppercase tracking-wider transition-all duration-300 pointer-events-auto",
-            registerMode === 'project' 
-              ? "bg-white dark:bg-slate-800 text-blue-600 dark:text-blue-400 shadow-sm"
-              : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
-          )}
-        >
-          <Building2 className="w-4 h-4 shrink-0" />
-          <span className="text-center leading-tight">ดึงข้อมูลจากโครงการ (Select from Project)</span>
-          <span className="bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300 px-1.5 py-0.5 text-[9px] rounded-full font-black shrink-0">Free</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setRegisterMode('manual')}
-          className={cn(
-            "flex-1 flex items-center justify-center gap-2.5 px-3 sm:px-5 py-2.5 rounded-xl text-[11px] sm:text-xs font-bold uppercase tracking-wider transition-all duration-300 pointer-events-auto",
-            registerMode === 'manual' 
-              ? "bg-white dark:bg-slate-800 text-blue-600 dark:text-blue-400 shadow-sm"
-              : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
-          )}
-        >
-          <Cpu className="w-4 h-4 shrink-0" />
-          <span className="text-center leading-tight">กรอกข้อมูลเอง (Manual Form)</span>
-        </button>
-      </div>
-
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch w-full">
         {/* Registration Column */}
         <div className="lg:col-span-7 flex flex-col">
@@ -751,261 +440,7 @@ const AddDevice: React.FC = () => {
               </div>
             )}
 
-            {/* MODE 1: PROJECT DIRECT IMPORT AND CHECKBOX SELECTION */}
-            {registerMode === 'project' && (
-              <div className="space-y-6 flex flex-col justify-between h-full">
-                <div className="space-y-6">
-                  <div>
-                    <h2 className="text-lg font-black text-slate-950 dark:text-white uppercase tracking-tight flex items-center gap-2">
-                      <FolderDown className="w-5 h-5 text-blue-600" />
-                      นำเข้าอุปกรณ์จากส่วนกลาง
-                    </h2>
-                    <p className="text-xs text-slate-500 mt-1">
-                      เลือกโครงการเพื่อดึงรายชื่ออุปกรณ์ย่อย ลำเรือนโคมไฟ และเซนเซอร์โซลาร์ทั้งหมดจากระบบหลังบ้าน โดยไม่ต้องคีย์ EUI ซ้ำซ้อน
-                    </p>
-                  </div>
-
-                  {/* Project Selector */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1 mb-1 block">
-                        เลือกโครงการเป้าหมาย (Central Project)
-                      </label>
-                      <div className="relative">
-                        <select
-                          value={selectedProjId}
-                          onChange={e => setSelectedProjId(e.target.value)}
-                          className="w-full bg-slate-50 dark:bg-slate-800 border-none rounded-2xl px-4 py-4 pr-10 text-sm font-bold text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-blue-500 shadow-inner appearance-none"
-                        >
-                          {projects.map(p => (
-                            <option key={p.id} value={p.id}>
-                              {p.name} {p.isTemplate ? '⚡' : ''}
-                            </option>
-                          ))}
-                        </select>
-                        <Building2 className="absolute right-4 top-4.5 w-4 h-4 text-slate-400 pointer-events-none" />
-                      </div>
-                    </div>
-
-                    {/* Quick filter multicast target */}
-                    <div>
-                      <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1 mb-1 block">
-                        เมื่อนำเข้า ให้จัดเข้ากลุ่ม (Optional)
-                      </label>
-                      <div className="relative">
-                        <select
-                          value={formData.multicastGroupId}
-                          onChange={e => setFormData({ ...formData, multicastGroupId: e.target.value })}
-                          className="w-full bg-slate-50 dark:bg-slate-800 border-none rounded-2xl px-4 py-4 pr-10 text-sm font-bold text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-blue-500 shadow-inner appearance-none"
-                        >
-                          <option value="">มีผลเดี่ยว (ไม่จัดกลุ่ม)</option>
-                          {groups.map(g => (
-                            <option key={g.id} value={g.id}>{g.name}</option>
-                          ))}
-                        </select>
-                        <Database className="absolute right-4 top-4.5 w-4 h-4 text-slate-400 pointer-events-none" />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Device List Section */}
-                  <div className="space-y-4">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-50/50 dark:bg-slate-900/10 p-3 rounded-2xl border border-slate-200/40 dark:border-slate-800/60">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div className="h-6 px-2.5 bg-blue-100 dark:bg-blue-950/65 rounded-full text-[10.5px] font-black text-blue-600 dark:text-blue-400 flex items-center justify-center">
-                          {filteredProjectDevices.length} Nodes Found
-                        </div>
-                        
-                        {/* Hide Registered Toggle */}
-                        <label className="flex items-center space-x-1.5 cursor-pointer bg-white dark:bg-slate-800 px-3 py-1 rounded-full shadow-sm hover:ring-1 hover:ring-blue-500/20 transition-all select-none">
-                          <input
-                            type="checkbox"
-                            checked={hideRegistered}
-                            onChange={(e) => setHideRegistered(e.target.checked)}
-                            className="rounded border-slate-300 dark:border-slate-700 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 shrink-0 cursor-pointer"
-                          />
-                          <span className="text-[10px] font-black uppercase text-slate-500 dark:text-slate-300 tracking-wider">
-                            🏠 ซ่อนอุปกรณ์มีบ้าน
-                          </span>
-                        </label>
-                      </div>
-
-                      {/* Micro Search Box */}
-                      <div className="relative w-full sm:max-w-[200px]">
-                        <input
-                          type="text"
-                          value={projectSearchTerm}
-                          onChange={e => setProjectSearchTerm(e.target.value)}
-                          placeholder="ค้นหาชื่ออุปกรณ์ / DevEUI..."
-                          className="w-full bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-800 rounded-xl pl-8 pr-4 py-1.5 text-xs font-semibold outline-none focus:ring-1 focus:ring-blue-500 shadow-sm"
-                        />
-                        <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-slate-400" />
-                      </div>
-                    </div>
-
-                    {/* Table Device Listing */}
-                    <div className="overflow-x-auto border border-slate-200/60 dark:border-slate-800/80 rounded-2xl bg-white dark:bg-slate-900 shadow-sm max-h-[350px] overflow-y-auto">
-                      <table className="w-full text-left border-collapse">
-                        <thead>
-                          <tr className="bg-slate-50/50 dark:bg-slate-950/20 border-b border-slate-100 dark:border-slate-800 text-[10px] text-slate-400 font-black tracking-widest uppercase">
-                            <th className="py-4 px-4 w-12 text-center">
-                              <input
-                                type="checkbox"
-                                checked={
-                                  filteredProjectDevices.length > 0 &&
-                                  filteredProjectDevices
-                                    .filter(item => !existingDevEuis.has(item.devEui) || !!formData.multicastGroupId)
-                                    .every(item => selectedProjDevices.includes(item.devEui))
-                                }
-                                onChange={() => toggleSelectAll(filteredProjectDevices)}
-                                className="rounded border-slate-300 dark:border-slate-700 text-blue-600 focus:ring-blue-500 h-4 w-4 shrink-0 transition-all cursor-pointer"
-                              />
-                            </th>
-                            <th className="py-4 px-4">ชื่ออุปกรณ์ / รายละเอียด</th>
-                            <th className="py-4 px-4">LoRa Credentials</th>
-                            <th className="py-4 px-4 text-center">ตำแหน่ง</th>
-                            <th className="py-4 px-4 text-center">สถานะใช้งาน</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs font-semibold">
-                          {loadingProjDevices ? (
-                            <tr>
-                              <td colSpan={5} className="py-12 text-center text-slate-450">
-                                <span className="inline-flex items-center gap-2 text-sm font-bold text-slate-500 animate-pulse">
-                                  <Clock className="w-5 h-5 text-blue-600 animate-spin" />
-                                  กำลังดึงรายการอุปกรณ์จากส่วนกลาง...
-                                </span>
-                              </td>
-                            </tr>
-                          ) : filteredProjectDevices.length === 0 ? (
-                            <tr>
-                              <td colSpan={5} className="py-12 text-center">
-                                <div className="flex flex-col items-center justify-center text-slate-400 py-4">
-                                  <HelpCircle className="w-8 h-8 text-slate-300 mb-2" />
-                                  <p className="text-sm font-bold text-slate-500">ไม่พบข้อมูลอุปกรณ์ในโครงการนี้</p>
-                                  <p className="text-[11px] text-slate-400 mt-1">กรุณาลองเลือกโครงการอื่น หรือตรวจเช็ค backend API</p>
-                                </div>
-                              </td>
-                            </tr>
-                          ) : (
-                            filteredProjectDevices.map((item, index) => {
-                              const isLinked = existingDevEuis.has(item.devEui);
-                              const isChecked = selectedProjDevices.includes(item.devEui);
-                              const isActive = activeProjectEui === item.devEui;
-                              return (
-                                <tr 
-                                  key={item.devEui || index} 
-                                  className={cn(
-                                    "transition-colors hover:bg-slate-55 dark:hover:bg-slate-800/40 cursor-pointer",
-                                    isLinked && !formData.multicastGroupId
-                                      ? "bg-slate-50/50 dark:bg-slate-950/10 opacity-60 cursor-not-allowed" 
-                                      : "",
-                                    isActive ? "bg-blue-50/75 dark:bg-blue-950/30 text-blue-600 dark:text-blue-200" : ""
-                                  )}
-                                  onClick={() => focusDeviceOnMap(item)}
-                                >
-                                  <td className="py-3 px-4 text-center" onClick={(e) => e.stopPropagation()}>
-                                    <input
-                                      type="checkbox"
-                                      disabled={isLinked && !formData.multicastGroupId}
-                                      checked={isChecked}
-                                      onChange={() => toggleSelectDevice(item.devEui)}
-                                      className="rounded border-slate-300 dark:border-slate-700 text-blue-600 focus:ring-blue-500 h-4 w-4 shrink-0 transition-all cursor-pointer disabled:cursor-not-allowed"
-                                    />
-                                  </td>
-                                  <td className="py-3 px-4">
-                                    <div className="font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                                      {isActive && <span className="text-[10px] bg-blue-600 text-white px-1.5 py-0.5 rounded-md font-black">ACTIVE</span>}
-                                      <span>{item.name}</span>
-                                    </div>
-                                    <div className="text-[10px] text-slate-400 mt-1 font-medium">{item.description}</div>
-                                  </td>
-                                  <td className="py-3 px-4 font-mono text-[11px]">
-                                    <div className="flex items-center space-x-1">
-                                      <span className="text-slate-400 text-[10px] font-black">EUI:</span>
-                                      <span className="text-slate-700 dark:text-slate-300 font-extrabold">{item.devEui}</span>
-                                    </div>
-                                    <div className="flex items-center space-x-1 mt-1">
-                                      <span className="text-slate-400 text-[10px] font-black">KEY:</span>
-                                      <span className="text-slate-400 truncate w-24">{(item.appKey || '').substring(0, 8)}...</span>
-                                    </div>
-                                  </td>
-                                  <td className="py-3 px-4 text-center text-[10px]">
-                                    <button 
-                                      type="button"
-                                      className={cn(
-                                        "inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg font-black uppercase text-[9.5px]",
-                                        isActive 
-                                          ? "bg-blue-600 text-white shadow-sm" 
-                                          : "bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300"
-                                      )}
-                                    >
-                                      <MapPin className={cn("w-3 h-3", isActive ? "text-white" : "text-red-500")} />
-                                      <span>{isActive ? "จัดพิกัดอยู่" : "Focus"}</span>
-                                    </button>
-                                  </td>
-                                  <td className="py-3 px-3 text-center">
-                                    {isLinked ? (
-                                      <div className="flex flex-col items-center gap-1">
-                                        <span className="inline-flex items-center space-x-1 px-2.5 py-1 bg-green-500/10 text-green-600 dark:text-green-400 rounded-full text-[10px] font-extrabold">
-                                          <Check className="w-3 h-3" />
-                                          <span>ลงทะเบียนแล้ว</span>
-                                        </span>
-                                        {formData.multicastGroupId && (
-                                          <span className="text-[9px] text-blue-600 dark:text-blue-400 font-bold">
-                                            เพิ่มเข้ากลุ่มได้
-                                          </span>
-                                        )}
-                                      </div>
-                                    ) : (
-                                      <span className="inline-flex items-center space-x-1 px-2.5 py-1 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-full text-[10px] font-extrabold animate-pulse">
-                                        <Zap className="w-3 h-3" />
-                                        <span>พร้อมนำเข้า</span>
-                                      </span>
-                                    )}
-                                  </td>
-                                </tr>
-                              );
-                            })
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-
-                  {/* Bulk Guidance Tip helper */}
-                  <div className="bg-blue-500/5 rounded-2xl p-4 border border-blue-500/15 flex items-start space-x-3">
-                    <CheckCircle2 className="w-5 h-5 text-blue-500 shrink-0 mt-0.5" />
-                    <div className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed font-semibold">
-                      <p className="text-blue-600 dark:text-blue-400 font-black uppercase text-[10px] tracking-wider mb-1">PRO-TIP: ปากกาพู่กัน แผนทีทาสีร่วม</p>
-                      เมื่อกดแต่ละคอลัมน์ แผนที่ดาวเทียมด้านขวาจะซูมพุ่งไปยังพื้นที่ติดตั้งทันที เพื่อพิจารณาตำแหน่งใช้งานจริง ก่อนจะนำร่องเชื่อมต่ออุปกรณ์เข้าโครงการ
-                    </div>
-                  </div>
-                </div>
-
-                {/* Import Submission Action footer */}
-                <div className="flex space-x-4 pt-6 border-t border-slate-100 dark:border-slate-800 mt-6 md:mt-12">
-                  <button
-                    type="button"
-                    onClick={() => navigate('/devices')}
-                    className="flex-1 py-4 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 font-bold rounded-2xl transition-all uppercase text-xs tracking-widest"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleBulkImport}
-                    disabled={loading || selectedProjDevices.length === 0}
-                    className="flex-[2] py-4 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-2xl shadow-xl hover:shadow-blue-600/30 transition-all uppercase text-xs tracking-widest disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {loading ? ' sedang mendaftarkan...' : `นำเข้าที่เลือก (${selectedProjDevices.length} อุปกรณ์) 📥`}
-                  </button>
-                </div>
-              </div>
-            )}
-
             {/* MODE 2: FORM SETUP MANUAL REGISTRATION */}
-            {registerMode === 'manual' && (
               <form onSubmit={handleManualSubmit} className="space-y-4 flex flex-col justify-between h-full">
                 <div className="space-y-4">
                   <div>
@@ -1218,7 +653,6 @@ const AddDevice: React.FC = () => {
                   </button>
                 </div>
               </form>
-            )}
           </div>
         </div>
 
@@ -1228,14 +662,12 @@ const AddDevice: React.FC = () => {
             <div className="p-6 pb-3 flex justify-between items-center bg-white dark:bg-slate-900 z-10">
               <div>
                 <h3 className="text-[17px] font-bold text-slate-900 dark:text-white uppercase tracking-tight flex items-center gap-2">
-                  <MapPin className="w-5 h-5 text-blue-600" />
-                  แผนที่ตำแหน่ง (Installation Map)
+                  <MapPin className="w-5 h-5 text-blue-600" />แผนที่ตำแหน่ง (Installation Map)
                 </h3>
-                <p className="text-[10px] text-slate-500 font-semibold tracking-wider uppercase mt-0.5">คลิกบนแผนที่เพื่อกักเก็บพิกัด หรือ เลือกแถวอุปกรณ์เพื่อพิกัดเป้าหมาย</p>
+                <p className="text-[10px] text-slate-500 font-semibold tracking-wider uppercase mt-0.5">คลิกบนแผนที่เพื่อกำหนดพิกัด</p>
               </div>
               
               {/* Reset to current position tool */}
-              {registerMode === 'manual' && (
                 <button 
                   type="button"
                   onClick={() => {
@@ -1257,7 +689,6 @@ const AddDevice: React.FC = () => {
                 >
                   Auto Detect
                 </button>
-              )}
             </div>
 
             {/* Interactive Map Container */}
@@ -1265,9 +696,8 @@ const AddDevice: React.FC = () => {
               <AddDeviceMapComp
                 mapCenter={mapCenter}
                 mapZoom={mapZoom}
-                registerMode={registerMode}
-                filteredProjectDevices={filteredProjectDevices}
-                activeProjectEui={activeProjectEui}
+                filteredProfileDevices={[]}
+                activeDeviceEui={''}
                 focusDeviceOnMap={focusDeviceOnMap}
                 handleMapClick={handleMapClick}
                 handleBoundsChange={handleBoundsChange}

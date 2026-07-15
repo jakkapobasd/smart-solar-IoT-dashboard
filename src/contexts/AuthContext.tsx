@@ -108,12 +108,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (!userData && access_token) {
         try {
-          const payloadStr = atob(access_token.split('.')[1]);
-          const payload = JSON.parse(payloadStr);
-          userData = {
-            id: payload.sub || payload.id || payload.user_id || "unknown",
-            name: payload.preferred_username || payload.name || credentials.username
-          };
+          const tokenParts = access_token.split('.');
+          if (tokenParts.length > 1) {
+            const payloadStr = atob(tokenParts[1]);
+            const payload = JSON.parse(payloadStr);
+            userData = {
+              id: payload.sub || payload.id || payload.user_id || "unknown",
+              name: payload.preferred_username || payload.name || credentials.username
+            };
+          }
         } catch (e) {
           userData = { id: "unknown", name: credentials.username };
         }

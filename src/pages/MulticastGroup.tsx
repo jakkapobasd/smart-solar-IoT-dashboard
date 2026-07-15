@@ -51,115 +51,8 @@ const MulticastGroup: React.FC = () => {
   const [selectedGroup, setSelectedGroup] = useState<any>(null);
   const [devices, setDevices] = useState<any[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
-  const [realSignalStats, setRealSignalStats] = useState<Record<string, { rssi: number | null, snr: number | null }>>({});
-
-  const fetchRealSignalStatsForDevices = async (deviceList: any[]) => {
-    if (!deviceList || deviceList.length === 0) return;
-    
-    const validDevices = deviceList.filter(d => d.devEui && d.devEui.length === 16);
-    if (validDevices.length === 0) return;
-
-    const promises = validDevices.map(async (dev) => {
-      try {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        const tomorrowStr = tomorrow.toISOString().split('T')[0];
-
-        const prevDate = new Date();
-        prevDate.setDate(prevDate.getDate() - 14);
-        const prevStr = prevDate.toISOString().split('T')[0];
-
-        const startTs = `${prevStr}T00:00:00Z`;
-        const endTs = `${tomorrowStr}T23:59:59Z`;
-        
-        const response = await DeviceService.getDeviceRecords(dev.devEui, startTs, endTs);
-        let records: any[] = [];
-        if (response && response.data) {
-          if (Array.isArray(response.data.records)) {
-            records = response.data.records;
-          } else if (Array.isArray(response.data.result)) {
-            records = response.data.result;
-          } else if (Array.isArray(response.data)) {
-            records = response.data;
-          }
-        }
-        
-        if (records && records.length > 0) {
-          records.sort((a, b) => {
-            const tA = new Date(a.time || a.createdAt || a.timestamp || 0).getTime();
-            const tB = new Date(b.time || b.createdAt || b.timestamp || 0).getTime();
-            return tB - tA;
-          });
-          
-          const latestRecord = records[0];
-          let rssi: number | null = null;
-          let snr: number | null = null;
-          
-          if (Array.isArray(latestRecord.rxInfo) && latestRecord.rxInfo.length > 0) {
-            const info = latestRecord.rxInfo[0];
-            if (info.rssi !== undefined && info.rssi !== null) rssi = Number(info.rssi);
-            if (info.snr !== undefined && info.snr !== null) snr = Number(info.snr);
-          }
-          
-          if (rssi === null) {
-            const keys = ['rssi', 'signal_rssi', 'gateway_rssi', 'rssiDbm', 'rssi_dbm'];
-            for (const key of keys) {
-              if (latestRecord[key] !== undefined && latestRecord[key] !== null) rssi = Number(latestRecord[key]);
-              else if (latestRecord.variables?.[key] !== undefined && latestRecord.variables?.[key] !== null) rssi = Number(latestRecord.variables[key]);
-              else if (latestRecord.object?.[key] !== undefined && latestRecord.object?.[key] !== null) rssi = Number(latestRecord.object[key]);
-              if (rssi !== null) break;
-            }
-          }
-          
-          if (snr === null) {
-            const keys = ['snr', 'signal_snr', 'gateway_snr', 'snrDb', 'snr_db'];
-            for (const key of keys) {
-              if (latestRecord[key] !== undefined && latestRecord[key] !== null) snr = Number(latestRecord[key]);
-              else if (latestRecord.variables?.[key] !== undefined && latestRecord.variables?.[key] !== null) snr = Number(latestRecord.variables[key]);
-              else if (latestRecord.object?.[key] !== undefined && latestRecord.object?.[key] !== null) snr = Number(latestRecord.object[key]);
-              if (snr !== null) break;
-            }
-          }
-          
-          if (rssi !== null || snr !== null) {
-            return { devEui: dev.devEui, rssi, snr };
-          }
-        }
-      } catch (err) {
-        console.warn(`[Signal Stats Fetcher] Failed latest record for ${dev.devEui}:`, err);
-      }
-      return null;
-    });
-    
-    const results = await Promise.all(promises);
-    const newStatsMap: Record<string, { rssi: number | null, snr: number | null }> = {};
-    results.forEach((r) => {
-      if (r) {
-        newStatsMap[r.devEui.toLowerCase()] = { rssi: r.rssi, snr: r.snr };
-      }
-    });
-    
-    setRealSignalStats((prev) => ({ ...prev, ...newStatsMap }));
-  };
-
-  useEffect(() => {
-    if (devices.length > 0) {
-      fetchRealSignalStatsForDevices(devices);
-    }
-  }, [devices]);
 
   const getDeviceSignalStats = (device: any) => {
-    // 1. Try real live telemetry signal stats fetched asynchronously
-    if (device.devEui) {
-      const canonicalEui = device.devEui.toLowerCase();
-      if (realSignalStats[canonicalEui]) {
-        const rs = realSignalStats[canonicalEui];
-        if (rs.rssi !== null || rs.snr !== null) {
-          return { rssi: rs.rssi, snr: rs.snr };
-        }
-      }
-    }
-
     // 2. Default checks
     let rssi = device.variables?.rssi ?? device.rssi ?? device.deviceStatus?.rssi;
     let snr = device.variables?.snr ?? device.snr ?? device.deviceStatus?.snr;
@@ -170,7 +63,7 @@ const MulticastGroup: React.FC = () => {
         return { rssi: null, snr: null };
       }
       
-      const isOnline = (Date.now() - new Date(device.lastSeenAt).getTime()) / 3600000 <= 1;
+      const isOnline = (Date.now() - new Date(device.lastSeenAt).getTime()) / 3600000 <= 2;
       
       let hash = 0;
       for (let i = 0; i < device.devEui.length; i++) {
@@ -375,7 +268,7 @@ const MulticastGroup: React.FC = () => {
     setCommandPending(true);
     const brightnessMap: Record<string, number> = { 'Off': 0, '25%': 25, '50%': 50, '75%': 75, '100%': 100 };
     const numericLevel = brightnessMap[level] !== undefined ? brightnessMap[level] : 0;
-    const duration = customDuration ?? 600;
+    const duration = customDuration ?? 600; // Default to 10 minutes (600s) for all, including Off
     
     const currentRunId = Date.now();
     requestRunIdRef.current = currentRunId;
@@ -448,8 +341,8 @@ const MulticastGroup: React.FC = () => {
       
       if (requestRunIdRef.current === currentRunId) {
         setActiveBrightnessMap(prev => ({ ...prev, [selectedGroup.id]: level }));
-        const durationText = duration >= 60 ? `${duration / 60} นาที` : `${duration} วินาที`;
-        showToast('success', `ปรับความสว่างเป็น ${level} สำหรับกลุ่ม ${selectedGroup.name} เป็นเวลา ${durationText}`);
+        showToast('success', `ปรับความสว่างเป็น ${level} สำหรับกลุ่ม ${selectedGroup.name}`);
+        fetchDevices(selectedGroup.id); // Re-fetch devices to update their status immediately
       }
     } catch (err: any) {
       if (requestRunIdRef.current === currentRunId) {
@@ -481,15 +374,18 @@ const MulticastGroup: React.FC = () => {
     if (!selectedGroup) return;
     setCommandPending(true);
     try {
-      await triggerDeviceCommandSeq(devices, DeviceService.setGroupSchedules(selectedGroup.id, schedules));
+      // Directly call the service to set schedules for the group.
+      await DeviceService.setGroupSchedules(selectedGroup.id, schedules);
+      
+      // On success, save to localStorage for UI persistence and show success message.
       localStorage.setItem(`group_schedules_${selectedGroup.id}`, JSON.stringify(schedules));
       showToast('success', 'บันทึกและเปิดใช้งานประวัติกลุ่มตารางเวลาเรียบร้อยเเล้ว');
       setIsScheduleModalOpen(false);
     } catch (err: any) {
-      console.error(err);
-      // Fallback for mock/simulation with descriptive success of intent
+      console.error("Failed to save group schedules:", err);
       localStorage.setItem(`group_schedules_${selectedGroup.id}`, JSON.stringify(schedules));
-      showToast('success', 'บันทึกและติดตั้งค่าตารางเวลาสัญกรณ์ (โหมดจำลอง) เรียบร้อยแล้ว');
+      const errMsg = err.response?.data?.detail || err.message || "The backend could not be reached.";
+      showToast('error', `API Error: ${errMsg}. Schedules saved for UI simulation only.`);
       setIsScheduleModalOpen(false);
     } finally {
       setCommandPending(false);
@@ -641,7 +537,8 @@ const MulticastGroup: React.FC = () => {
           return next;
         });
       }, 7000);
-      showToast('error', 'Failed to remove device');
+      const errorMsg = err.response?.data?.detail || err.response?.data?.message || 'Failed to remove device';
+      showToast('error', `ลบอุปกรณ์ล้มเหลว: ${errorMsg}`);
     }
   };
 
@@ -742,6 +639,7 @@ const MulticastGroup: React.FC = () => {
       }));
       showToast('success', `Sent brightness command (${brightnessLevel}%) to ${targetEuis.length} devices`);
       setSelectedDeviceEuis([]);
+      fetchDevices(selectedGroup.id); // Re-fetch devices to update their status immediately
     } catch (err) {
       showToast('error', 'Failed to send brightness command to some devices');
     } finally {
@@ -786,18 +684,7 @@ const MulticastGroup: React.FC = () => {
 
   useEffect(() => {
     fetchGroups();
-    
-    if (refreshInterval === null) return;
-    
-    const interval = setInterval(() => {
-      if (user?.applicationId) {
-        api.get('/multicast-groups', { params: { applicationId: user.applicationId, limit: 100 } })
-          .then(res => setGroups(res.data.result || []))
-          .catch(console.error);
-      }
-    }, refreshInterval * 1000);
-    return () => clearInterval(interval);
-  }, [user, refreshInterval]);
+  }, [user]);
 
   useEffect(() => {
     setSelectedDeviceEuis([]); // Reset selection when group changes
@@ -812,47 +699,19 @@ const MulticastGroup: React.FC = () => {
         setSelectedGroupIdMode(0);
       }
 
-      const loadLocalSchedules = () => {
-        const savedSchedules = localStorage.getItem(`group_schedules_${selectedGroup.id}`);
-        if (savedSchedules !== null) {
-          try {
-            setSchedules(JSON.parse(savedSchedules));
-            return true;
-          } catch (e) {
-            console.error("Failed to parse saved schedules for group:", selectedGroup.id, e);
-          }
-        }
-        return false;
-      };
-
-      const hasLocal = loadLocalSchedules();
-      if (!hasLocal) {
-        // Try to fetch schedules from the backend first for maximum consistency
-        api.get(`/solar-street-lights/bulk-schedules/${selectedGroup.id}`)
-          .then(res => {
-            if (res.data && res.data.schedules && res.data.schedules.length > 0) {
-              const mapped = res.data.schedules.map((s: any) => ({
-                brightness: s.brightness !== undefined ? s.brightness : s.brightnessLevel,
-                duration: s.duration
-              }));
-              setSchedules(mapped);
-              localStorage.setItem(`group_schedules_${selectedGroup.id}`, JSON.stringify(mapped));
-            } else {
-              setSchedules([
-                { brightness: 40, duration: 180 },
-                { brightness: 20, duration: 540 },
-                { brightness: 0, duration: 60 },
-                { brightness: 0, duration: 60 },
-                { brightness: 0, duration: 60 },
-                { brightness: 0, duration: 60 },
-                { brightness: 0, duration: 60 },
-                { brightness: 0, duration: 60 },
-                { brightness: 0, duration: 60 },
-              ]);
-            }
-          })
-          .catch(err => {
-            console.warn("Failed to fetch group schedules from backend, using default presets", err);
+      // Always fetch fresh schedules from the backend when the group changes.
+      api.get(`/solar-street-lights/bulk-schedules/${selectedGroup.id}`)
+        .then(res => {
+          if (res.data && res.data.schedules && res.data.schedules.length > 0) {
+            const mapped = res.data.schedules.map((s: any) => ({
+              brightness: s.brightnessLevel !== undefined ? s.brightnessLevel : s.brightness,
+              duration: Math.round(s.duration / 60) // Convert seconds from API to minutes for UI
+            }));
+            setSchedules(mapped);
+            // Also update localStorage so other components (like DeviceDetail) can use it.
+            localStorage.setItem(`group_schedules_${selectedGroup.id}`, JSON.stringify(mapped));
+          } else {
+            // If API returns no schedules, use a default.
             setSchedules([
               { brightness: 40, duration: 180 },
               { brightness: 20, duration: 540 },
@@ -864,19 +723,17 @@ const MulticastGroup: React.FC = () => {
               { brightness: 0, duration: 60 },
               { brightness: 0, duration: 60 },
             ]);
-          });
-      }
-      
-      if (refreshInterval !== null) {
-        const interval = setInterval(() => {
-          if (selectedGroup?.id) {
-            api.get('/devices', { params: { applicationId: user?.applicationId, multicastGroupId: selectedGroup.id, limit: 100 } })
-              .then(res => setDevices(res.data.result || []))
-              .catch(console.error);
           }
-        }, refreshInterval * 1000);
-        return () => clearInterval(interval);
-      }
+        })
+        .catch(err => {
+          // If API fails, try to load from localStorage as a fallback.
+          console.warn("Failed to fetch group schedules from backend, attempting to load from cache.", err);
+          const savedSchedules = localStorage.getItem(`group_schedules_${selectedGroup.id}`);
+          if (savedSchedules) {
+            try { setSchedules(JSON.parse(savedSchedules)); } catch (e) {}
+          }
+        });
+      
     } else {
       setDevices([]);
       setSchedules([
@@ -891,9 +748,32 @@ const MulticastGroup: React.FC = () => {
         { brightness: 0, duration: 60 },
       ]);
     }
+  }, [selectedGroup, user]);
+
+  // Centralized polling effect
+  useEffect(() => {
+    if (refreshInterval === null) return;
+
+    const interval = setInterval(() => {
+      if (!user?.applicationId) return;
+
+      // Poll for the list of groups
+      api.get('/multicast-groups', { params: { applicationId: user.applicationId, limit: 100 } })
+        .then(res => setGroups(res.data.result || []))
+        .catch(err => console.error("Polling groups failed:", err));
+
+      // Poll for devices in the selected group
+      if (selectedGroup?.id) {
+        api.get('/devices', { params: { applicationId: user.applicationId, multicastGroupId: selectedGroup.id, limit: 100 } })
+          .then(res => setDevices(res.data.result || []))
+          .catch(err => console.error("Polling group devices failed:", err));
+      }
+    }, refreshInterval * 1000);
+
+    return () => clearInterval(interval);
   }, [selectedGroup, user, refreshInterval]);
 
-  const onlineCount = devices.filter(d => d.lastSeenAt && (Date.now() - new Date(d.lastSeenAt).getTime()) / 3600000 <= 1).length;
+  const onlineCount = devices.filter(d => d.lastSeenAt && (Date.now() - new Date(d.lastSeenAt).getTime()) / 3600000 <= 2).length;
   const neverSeenCount = devices.filter(d => !d.lastSeenAt).length;
   const offlineCount = devices.length - onlineCount - neverSeenCount;
 
@@ -1272,7 +1152,7 @@ const MulticastGroup: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/50">
                   {paginatedDevices.map((device, i) => {
-                    const isOnline = device.lastSeenAt && (Date.now() - new Date(device.lastSeenAt).getTime()) / 3600000 <= 1;
+                    const isOnline = device.lastSeenAt && (Date.now() - new Date(device.lastSeenAt).getTime()) / 3600000 <= 2;
                     const vars = device.variables || {};
                     const status = device.deviceStatus || {};
                     const soc = vars.batterySoc ?? vars.batteryLevel ?? vars.soc ?? status.batteryLevel ?? status.soc ?? device.soc;
@@ -1431,7 +1311,7 @@ const MulticastGroup: React.FC = () => {
             </div>{/* Mobile Device list card layout */}
             <div className="block md:hidden p-3 bg-slate-50/50 dark:bg-slate-950/20 space-y-3">
               {paginatedDevices.map((device, i) => {
-                const isOnline = device.lastSeenAt && (Date.now() - new Date(device.lastSeenAt).getTime()) / 3600000 <= 1;
+                const isOnline = device.lastSeenAt && (Date.now() - new Date(device.lastSeenAt).getTime()) / 3600000 <= 2;
                 const vars = device.variables || {};
                 const status = device.deviceStatus || {};
                 const soc = vars.batterySoc ?? vars.batteryLevel ?? vars.soc ?? status.batteryLevel ?? status.soc ?? device.soc;

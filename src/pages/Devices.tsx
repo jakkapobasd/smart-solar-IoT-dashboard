@@ -208,21 +208,24 @@ const Devices: React.FC = () => {
     const interval = setInterval(() => {
       // Don't set loading state during background polls to avoid UI jitter
       if (user?.applicationId) {
-        Promise.all([
-          api.get('/devices', { params: { applicationId: user.applicationId, limit: 100 } }),
-          api.get('/multicast-groups', { params: { applicationId: user.applicationId, limit: 100 } }),
-          api.get('/gateways', { params: { tenantId: user.tenantId, limit: 100 } }),
-          user.tenantId ? DeviceService.getDeviceProfiles(user.tenantId, 100) : Promise.resolve({ data: { result: [] } })
-        ]).then(([devRes, groupRes, gwRes, profilesRes]) => {
-          setDevices(devRes.data.result || []);
-          setGroups(groupRes.data.result || []);
-          setGateways(gwRes.data.result || []);
-          setDeviceProfiles(profilesRes?.data?.result || []);
-        }).catch(err => console.error("Background poll error", err));
+        // Fetch general data
+        api.get('/devices', { params: { applicationId: user.applicationId, limit: 100 } }).then(res => setDevices(res.data.result || [])).catch(err => console.error("Poll error (devices)", err));
+        api.get('/multicast-groups', { params: { applicationId: user.applicationId, limit: 100 } }).then(res => setGroups(res.data.result || [])).catch(err => console.error("Poll error (groups)", err));
+        api.get('/gateways', { params: { tenantId: user.tenantId, limit: 100 } }).then(res => setGateways(res.data.result || [])).catch(err => console.error("Poll error (gateways)", err));
+        if (user.tenantId) {
+          DeviceService.getDeviceProfiles(user.tenantId, 100).then(res => setDeviceProfiles(res?.data?.result || [])).catch(err => console.error("Poll error (profiles)", err));
+        }
+
+        // Also refresh the devices within the selected group if a filter is active
+        if (selectedGroupId) {
+          api.get('/devices', { params: { applicationId: user.applicationId, multicastGroupId: selectedGroupId, limit: 100 } })
+            .then(res => setGroupDevices(res.data.result || []))
+            .catch(err => console.error("Poll error (group devices)", err));
+        }
       }
     }, refreshInterval * 1000);
     return () => clearInterval(interval);
-  }, [user, refreshInterval]);
+  }, [user, refreshInterval, selectedGroupId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -336,14 +339,15 @@ const Devices: React.FC = () => {
       if (!isBelongToGroup) return false;
     }
 
-    const matchesSearch = d.name.toLowerCase().includes(searchTerm.toLowerCase()) || d.devEui.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = (d.name || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          (d.devEui || '').toLowerCase().includes(searchTerm.toLowerCase());
     if (!matchesSearch) return false;
 
     if (statusFilter === 'All') return true;
     
     // Check status
     const hasSeen = !!d.lastSeenAt;
-    const isOnline = hasSeen && (Date.now() - new Date(d.lastSeenAt).getTime()) / 3600000 <= 1;
+    const isOnline = hasSeen && (Date.now() - new Date(d.lastSeenAt).getTime()) / 3600000 <= 2;
     
     if (statusFilter === 'Online' && isOnline) return true;
     if (statusFilter === 'Offline' && hasSeen && !isOnline) return true;
@@ -373,7 +377,7 @@ const Devices: React.FC = () => {
       const getStatusRank = (d: any) => {
         const hasSeen = !!d.lastSeenAt;
         if (!hasSeen) return 1; // "NeverSeen"
-        const isOnline = (Date.now() - new Date(d.lastSeenAt).getTime()) / 3600000 <= 1;
+        const isOnline = (Date.now() - new Date(d.lastSeenAt).getTime()) / 3600000 <= 2;
         return isOnline ? 3 : 2; // "Online" or "Offline"
       };
       const aRank = getStatusRank(a);
@@ -554,10 +558,10 @@ const Devices: React.FC = () => {
             {/* Live Count Indicators */}
             <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1 text-xs font-bold text-slate-500 dark:text-slate-400 border-l border-transparent sm:border-slate-150 sm:dark:border-slate-800/60 pl-0 sm:pl-3.5 shrink-0">
               <span className="tracking-tight">
-                Online: <span className="text-emerald-500 dark:text-emerald-450 font-bold">{devices.filter(d => d.lastSeenAt && (Date.now() - new Date(d.lastSeenAt).getTime()) / 3600000 <= 1).length}</span>
+                Online: <span className="text-emerald-500 dark:text-emerald-450 font-bold">{devices.filter(d => d.lastSeenAt && (Date.now() - new Date(d.lastSeenAt).getTime()) / 3600000 <= 2).length}</span>
               </span>
               <span className="tracking-tight">
-                Offline: <span className="text-rose-500 dark:text-rose-450 font-bold">{devices.filter(d => d.lastSeenAt && (Date.now() - new Date(d.lastSeenAt).getTime()) / 3600000 > 1).length}</span>
+                Offline: <span className="text-rose-500 dark:text-rose-450 font-bold">{devices.filter(d => d.lastSeenAt && (Date.now() - new Date(d.lastSeenAt).getTime()) / 3600000 > 2).length}</span>
               </span>
               <span className="tracking-tight">
                 Never seen: <span className="text-slate-650 dark:text-slate-300 font-bold">{devices.filter(d => !d.lastSeenAt).length}</span>
@@ -568,6 +572,7 @@ const Devices: React.FC = () => {
         <div className="flex-1">
            <DeviceMap 
              devices={filteredDevices} 
+             groups={groups}
              selectedGroupId={selectedGroupId}
              groupDevices={groupDevices}
              onAddDeviceToGroup={(groupId, devEui) => handleAddDeviceToGroup(groupId, devEui)}
@@ -636,7 +641,7 @@ const Devices: React.FC = () => {
             </thead>
             <tbody className="divide-y divide-slate-50 dark:divide-slate-800/50">
               {paginatedDevices.map((device) => {
-                const isOnline = device.lastSeenAt && (Date.now() - new Date(device.lastSeenAt).getTime()) / 3600000 <= 1;
+                const isOnline = device.lastSeenAt && (Date.now() - new Date(device.lastSeenAt).getTime()) / 3600000 <= 2;
                 const vars = device.variables || {};
                 const status = device.deviceStatus || {};
                 const soc = vars.batterySoc ?? vars.batteryLevel ?? vars.soc ?? status.batteryLevel ?? status.soc ?? device.soc;
@@ -809,7 +814,7 @@ const Devices: React.FC = () => {
         {/* Mobile View: Card List */}
         <div className="block sm:hidden space-y-4 px-4">
           {paginatedDevices.map((device) => {
-            const isOnline = device.lastSeenAt && (Date.now() - new Date(device.lastSeenAt).getTime()) / 3600000 <= 1;
+            const isOnline = device.lastSeenAt && (Date.now() - new Date(device.lastSeenAt).getTime()) / 3600000 <= 2;
             const vars = device.variables || {};
             const status = device.deviceStatus || {};
             const soc = vars.batterySoc ?? vars.batteryLevel ?? vars.soc ?? status.batteryLevel ?? status.soc ?? device.soc;

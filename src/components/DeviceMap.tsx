@@ -2,7 +2,9 @@ import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { cn } from '../lib/utils';
+import { ChevronDown as ChevronDownIcon } from 'lucide-react';
 import L from 'leaflet';
+import RainViewerLayer from './RainViewerLayer';
 
 interface Device {
   name: string;
@@ -34,6 +36,7 @@ interface Device {
 interface DeviceMapProps {
   devices: Device[];
   gateways?: any[];
+  groups?: any[];
   focusedCoordinates?: [number, number] | null;
   focusedZoom?: number;
   focusedDevEui?: string | null;
@@ -44,6 +47,7 @@ interface DeviceMapProps {
   onRemoveDeviceFromGroupWithId?: (groupId: string, devEui: string) => void;
   isLoading?: boolean;
   hideDetailButton?: boolean;
+  showWeatherControls?: boolean;
 }
 
 function formatThaiDate(dateString: string | undefined | null): string {
@@ -124,9 +128,12 @@ const LeafletOverlay: React.FC<LeafletOverlayProps> = ({
       el.removeEventListener('click', clickHandler);
       if (markerRef.current) {
         try {
-          markerRef.current.remove();
+          // Failsafe: Check if the marker is still attached to a map before removing.
+          if ((markerRef.current as any)._map) {
+            markerRef.current.remove();
+          }
         } catch (e) {
-          console.warn("Leaflet overlay marker removal failed in DeviceMap:", e);
+          // Ignore errors during cleanup as map might be gone already.
         }
       }
     };
@@ -145,6 +152,7 @@ const LeafletOverlay: React.FC<LeafletOverlayProps> = ({
 const DeviceMap: React.FC<DeviceMapProps> = ({
   devices,
   gateways,
+  groups,
   focusedCoordinates = null,
   focusedZoom = 17,
   focusedDevEui = null,
@@ -155,6 +163,7 @@ const DeviceMap: React.FC<DeviceMapProps> = ({
   onRemoveDeviceFromGroupWithId,
   isLoading,
   hideDetailButton,
+  showWeatherControls = false,
 }) => {
   const navigate = useNavigate();
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
@@ -188,6 +197,7 @@ const DeviceMap: React.FC<DeviceMapProps> = ({
   const [activeDeviceEui, setActiveDeviceEui] = useState<string | null>(null);
   const [activeClusterId, setActiveClusterId] = useState<string | null>(null);
   const [activeGatewayId, setActiveGatewayId] = useState<string | null>(null);
+  const [addingToGroupEui, setAddingToGroupEui] = useState<string | null>(null);
 
   const [mapInstance, setMapInstance] = useState<L.Map | null>(null);
 
@@ -319,6 +329,7 @@ const DeviceMap: React.FC<DeviceMapProps> = ({
     }, 100);
 
     return () => {
+      map.off('moveend', onMoveEnd);
       map.remove();
       mapRef.current = null;
       setMapInstance(null);
@@ -419,6 +430,7 @@ const DeviceMap: React.FC<DeviceMapProps> = ({
     setActiveDeviceEui(null);
     setActiveClusterId(null);
     setActiveGatewayId(null);
+    setAddingToGroupEui(null);
   };
 
   return (
@@ -431,6 +443,9 @@ const DeviceMap: React.FC<DeviceMapProps> = ({
       <div ref={mapContainerRef} className="w-full h-full" style={{ minHeight: '300px' }}>
         {mapInstance && (
             <>
+              {showWeatherControls && (
+                <RainViewerLayer map={mapInstance} opacity={0.7} />
+              )}
               {/* Device and Cluster Markers */}
               {clustered.map((item) => {
                 if (item.isCluster) {
@@ -672,6 +687,39 @@ const DeviceMap: React.FC<DeviceMapProps> = ({
                             </button>
                           )}
                         </div>
+
+                        {onAddDeviceToGroup && groups && groups.length > 0 && !selectedGroupId && (
+                          <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                            {addingToGroupEui === activeDevice.devEui ? (
+                              <div className="relative">
+                                <select
+                                  onChange={(e) => {
+                                    const groupId = e.target.value;
+                                    if (groupId && activeDevice) {
+                                      onAddDeviceToGroup(groupId, activeDevice.devEui);
+                                      setAddingToGroupEui(null); // Close selector after adding
+                                    }
+                                  }}
+                                  className="w-full text-xs font-bold bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1.5 appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                >
+                                  <option value="">เลือกกลุ่ม...</option>
+                                  {groups.map((g: any) => (
+                                    <option key={g.id} value={g.id}>{g.name}</option>
+                                  ))}
+                                </select>
+                                <ChevronDownIcon className="absolute right-2 top-2 w-4 h-4 text-slate-400 pointer-events-none" />
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setAddingToGroupEui(activeDevice.devEui)}
+                                className="w-full px-2.5 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white text-[10px] font-bold rounded-lg transition-all cursor-pointer text-center"
+                              >
+                                Add to Group
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
 

@@ -6,3 +6,9 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Firebase Credentials (⚠️ ห้ามแชร์!)
+firebase-serviceAccountKey.json
+
+# Local device mappings
+data/
